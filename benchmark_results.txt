@@ -1,0 +1,24 @@
+=== System Information ===
+
+OS:              macOS
+OS Version:      macOS-26.4.1-arm64-arm-64bit
+Architecture:    arm64
+CPU:             Apple M4 Max
+CPU Cores:       14 physical / 14 logical
+GPU:             Apple M4 Max
+Total Memory:    36.0 GB
+Total VRAM:      36.0 GB (unified)
+Total Storage:   926.0 GB
+Timestamp:       2026-04-13 17:55:40
+
+--- Python Installations ---
+  Python 3.14.3 (/opt/homebrew/bin/python3)
+
+--- Virtual Environments ---
+  conda: ai
+  conda: datascience
+  conda: gpt-researcher
+  conda: local-llm
+  conda: mlx
+  conda: pythinker
+  venv: /Users/panda/Projects/active/Turbo_Quant/.venv
