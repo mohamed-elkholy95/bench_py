@@ -957,7 +957,12 @@ def collect_displays(run: CommandRunner, os_type: OSType) -> List[DisplayInfo]:
                             current = DisplayInfo()
                         res = stripped.split(":", 1)[1].strip()
                         res_clean = res.split("@")[0].strip()
-                        current.resolution = res_clean.replace(" ", "")
+                        # Extract just "NNNNxNNNN" — strip text like "Retina"
+                        match = re.match(r"(\d+)\s*x\s*(\d+)", res_clean)
+                        if match:
+                            current.resolution = f"{match.group(1)}x{match.group(2)}"
+                        else:
+                            current.resolution = res_clean.replace(" ", "")
                     elif stripped.endswith(":") and not stripped.startswith("Displays"):
                         if current:
                             displays.append(current)
@@ -1305,7 +1310,7 @@ _DEV_TOOLS = [
 def _parse_version(name: str, raw: str) -> Optional[str]:
     first_line = raw.strip().split("\n")[0]
     match = re.search(r"(\d+\.\d+[\.\d]*)", first_line)
-    return match.group(1) if match else first_line.strip()
+    return match.group(1) if match else None
 
 
 def collect_dev_tools(run: CommandRunner, os_type: OSType) -> List[DevTool]:

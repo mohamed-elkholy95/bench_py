@@ -1,0 +1,4 @@
+system_report.json
+system_report.txt
+__pycache__/
+.pytest_cache/
