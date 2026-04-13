@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import platform
+import re
 import signal
 import subprocess
 import sys
@@ -1208,3 +1209,223 @@ def collect_sensors(run: CommandRunner, os_type: OSType) -> Optional[SensorInfo]
     if temps or fans:
         return SensorInfo(temperatures=temps, fan_speeds=fans)
     return None
+
+
+# ---------------------------------------------------------------------------
+# Software collectors
+# ---------------------------------------------------------------------------
+
+def collect_python(run: CommandRunner, os_type: OSType) -> PythonInfo:
+    info = PythonInfo()
+    seen_paths: set = set()
+
+    active = os.environ.get("CONDA_DEFAULT_ENV") or os.environ.get("VIRTUAL_ENV")
+    if active:
+        info.active_env = active
+
+    cmds = ["python3", "python"] if os_type != OSType.WINDOWS else ["python", "python3"]
+    for cmd in cmds:
+        if os_type == OSType.WINDOWS:
+            path = run.run_or_none(
+                ["powershell", "-NoProfile", "-Command",
+                 f"(Get-Command {cmd} -ErrorAction SilentlyContinue).Source"]
+            )
+        else:
+            path = run.run_or_none(["which", cmd])
+        if not path:
+            continue
+        real = os.path.realpath(path.strip())
+        if real in seen_paths:
+            continue
+        seen_paths.add(real)
+        ver = run.run_or_none([cmd, "--version"])
+        if ver:
+            ver_str = ver.replace("Python ", "").strip()
+            info.installations.append(PythonInstall(version=ver_str, path=path.strip()))
+
+    for base in ["miniforge3", "miniconda3", "anaconda3", "Anaconda3"]:
+        envs_dir = os.path.join(os.path.expanduser("~"), base, "envs")
+        if not os.path.isdir(envs_dir):
+            continue
+        try:
+            for name in sorted(os.listdir(envs_dir)):
+                full = os.path.join(envs_dir, name)
+                if os.path.isdir(full):
+                    info.virtual_envs.append(VirtualEnv(type="conda", name=name, path=full))
+        except OSError:
+            pass
+
+    search_dirs = {os.path.expanduser("~/Projects"), os.getcwd()}
+    if os_type == OSType.WINDOWS:
+        search_dirs.add(os.path.expanduser("~\\Projects"))
+    seen_envs: set = set()
+    for search_dir in search_dirs:
+        if not os.path.isdir(search_dir):
+            continue
+        try:
+            for root, dirs, files in os.walk(search_dir):
+                depth = root.replace(search_dir, "").count(os.sep)
+                if depth >= 4:
+                    dirs.clear()
+                    continue
+                dirs[:] = [d for d in dirs if d not in {
+                    "node_modules", ".git", "__pycache__", "site-packages",
+                }]
+                if "pyvenv.cfg" in files and root not in seen_envs:
+                    seen_envs.add(root)
+                    info.virtual_envs.append(VirtualEnv(
+                        type="venv", name=os.path.basename(root), path=root,
+                    ))
+        except OSError:
+            pass
+
+    return info
+
+
+_DEV_TOOLS = [
+    ("git",    ["git", "--version"]),
+    ("docker", ["docker", "--version"]),
+    ("node",   ["node", "--version"]),
+    ("npm",    ["npm", "--version"]),
+    ("bun",    ["bun", "--version"]),
+    ("rustc",  ["rustc", "--version"]),
+    ("cargo",  ["cargo", "--version"]),
+    ("go",     ["go", "version"]),
+    ("java",   ["java", "-version"]),
+    ("gcc",    ["gcc", "--version"]),
+    ("clang",  ["clang", "--version"]),
+    ("make",   ["make", "--version"]),
+    ("cmake",  ["cmake", "--version"]),
+    ("curl",   ["curl", "--version"]),
+    ("wget",   ["wget", "--version"]),
+    ("ssh",    ["ssh", "-V"]),
+]
+
+
+def _parse_version(name: str, raw: str) -> Optional[str]:
+    first_line = raw.strip().split("\n")[0]
+    match = re.search(r"(\d+\.\d+[\.\d]*)", first_line)
+    return match.group(1) if match else first_line.strip()
+
+
+def collect_dev_tools(run: CommandRunner, os_type: OSType) -> List[DevTool]:
+    tools: List[DevTool] = []
+    for name, version_cmd in _DEV_TOOLS:
+        if os_type == OSType.WINDOWS:
+            path = run.run_or_none(
+                ["powershell", "-NoProfile", "-Command",
+                 f"(Get-Command {name} -ErrorAction SilentlyContinue).Source"]
+            )
+        else:
+            path = run.run_or_none(["which", name])
+        if not path:
+            continue
+        version = None
+        try:
+            proc = subprocess.Popen(
+                version_cmd,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            stdout, stderr = proc.communicate(timeout=5)
+            raw = stdout.strip() or stderr.strip()
+            if raw:
+                version = _parse_version(name, raw)
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        tools.append(DevTool(name=name, version=version, path=path.strip()))
+    return tools
+
+
+def collect_packages(run: CommandRunner, os_type: OSType) -> List[PackageInfo]:
+    packages: List[PackageInfo] = []
+
+    if os_type == OSType.MACOS:
+        brew = run.run_or_none(["brew", "list", "--formula", "-1"])
+        if brew:
+            pkg_list = [p.strip() for p in brew.split("\n") if p.strip()]
+            packages.append(PackageInfo(manager="brew", count=len(pkg_list), packages=pkg_list))
+        casks = run.run_or_none(["brew", "list", "--cask", "-1"])
+        if casks:
+            cask_list = [c.strip() for c in casks.split("\n") if c.strip()]
+            packages.append(PackageInfo(manager="brew-cask", count=len(cask_list), packages=cask_list))
+
+    elif os_type == OSType.LINUX:
+        dpkg = run.run_or_none(["dpkg-query", "-W", "-f", "${Package}\n"])
+        if dpkg:
+            pkg_list = [p.strip() for p in dpkg.split("\n") if p.strip()]
+            packages.append(PackageInfo(manager="apt", count=len(pkg_list), packages=pkg_list))
+        if not packages:
+            rpm = run.run_or_none(["rpm", "-qa", "--qf", "%{NAME}\n"])
+            if rpm:
+                pkg_list = [p.strip() for p in rpm.split("\n") if p.strip()]
+                packages.append(PackageInfo(manager="rpm", count=len(pkg_list), packages=pkg_list))
+        if not packages:
+            pac = run.run_or_none(["pacman", "-Qq"])
+            if pac:
+                pkg_list = [p.strip() for p in pac.split("\n") if p.strip()]
+                packages.append(PackageInfo(manager="pacman", count=len(pkg_list), packages=pkg_list))
+
+    elif os_type == OSType.WINDOWS:
+        choco = run.run_or_none(["choco", "list", "--local-only", "--id-only"])
+        if choco:
+            pkg_list = [p.strip() for p in choco.split("\n")
+                        if p.strip() and "packages installed" not in p]
+            packages.append(PackageInfo(manager="choco", count=len(pkg_list), packages=pkg_list))
+        winget = run.run_or_none(["winget", "list", "--source", "winget"])
+        if winget:
+            lines = [l for l in winget.split("\n")
+                     if l.strip() and "---" not in l and "Name" not in l]
+            packages.append(PackageInfo(manager="winget", count=len(lines), packages=[]))
+
+    return packages
+
+
+def collect_services(run: CommandRunner, os_type: OSType) -> List[ServiceInfo]:
+    services: List[ServiceInfo] = []
+    interesting = {
+        "ollama", "docker", "postgresql", "postgres", "mysql", "redis",
+        "nginx", "apache", "httpd", "mongodb", "mongod", "rabbitmq",
+        "elasticsearch", "grafana", "prometheus", "jenkins", "sshd", "orbstack",
+    }
+
+    if os_type == OSType.MACOS:
+        raw = run.run_or_none(["launchctl", "list"])
+        if raw:
+            for line in raw.split("\n")[1:]:
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    label = parts[2].lower()
+                    for svc in interesting:
+                        if svc in label:
+                            pid = parts[0].strip()
+                            status = "running" if pid != "-" and pid.isdigit() else "stopped"
+                            services.append(ServiceInfo(name=svc, status=status))
+                            break
+
+    elif os_type == OSType.LINUX:
+        raw = run.run_or_none(
+            ["systemctl", "list-units", "--type=service", "--no-pager", "--no-legend"]
+        )
+        if raw:
+            for line in raw.split("\n"):
+                parts = line.strip().split()
+                if len(parts) >= 4:
+                    unit = parts[0].replace(".service", "").lower()
+                    for svc in interesting:
+                        if svc in unit:
+                            active = parts[2] if len(parts) > 2 else "unknown"
+                            status = "running" if active == "active" else "stopped"
+                            services.append(ServiceInfo(name=svc, status=status))
+                            break
+
+    elif os_type == OSType.WINDOWS:
+        for svc in interesting:
+            raw = run.run_or_none(
+                ["powershell", "-NoProfile", "-Command",
+                 f"(Get-Service -Name '*{svc}*' -ErrorAction SilentlyContinue).Status"]
+            )
+            if raw:
+                status = "running" if "Running" in raw else "stopped"
+                services.append(ServiceInfo(name=svc, status=status))
+
+    return services

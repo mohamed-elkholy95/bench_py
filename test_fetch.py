@@ -264,3 +264,42 @@ def test_collect_sensors_returns_optional():
     with CommandRunner() as runner:
         result = collect_sensors(runner, os_type)
         assert result is None or isinstance(result, SensorInfo)
+
+
+def test_collect_python_returns_info():
+    from fetch import collect_python, CommandRunner, detect_os, PythonInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        info = collect_python(runner, os_type)
+        assert isinstance(info, PythonInfo)
+        assert len(info.installations) > 0
+
+
+def test_collect_dev_tools_returns_list():
+    from fetch import collect_dev_tools, CommandRunner, detect_os, DevTool
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        tools = collect_dev_tools(runner, os_type)
+        assert isinstance(tools, list)
+        names = [t.name for t in tools]
+        assert "git" in names
+
+
+def test_collect_packages_returns_list():
+    from fetch import collect_packages, CommandRunner, detect_os, PackageInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        pkgs = collect_packages(runner, os_type)
+        assert isinstance(pkgs, list)
+        for p in pkgs:
+            assert isinstance(p, PackageInfo)
+
+
+def test_collect_services_returns_list():
+    from fetch import collect_services, CommandRunner, detect_os, ServiceInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        services = collect_services(runner, os_type)
+        assert isinstance(services, list)
+        for s in services:
+            assert isinstance(s, ServiceInfo)
