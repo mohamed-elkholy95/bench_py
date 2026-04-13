@@ -194,3 +194,27 @@ def test_collect_gpu_returns_list():
         assert isinstance(gpus, list)
         for gpu in gpus:
             assert isinstance(gpu, GpuInfo)
+
+
+def test_collect_storage_returns_list():
+    from fetch import collect_storage, CommandRunner, detect_os, StorageInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        disks = collect_storage(runner, os_type)
+        assert isinstance(disks, list)
+        assert len(disks) > 0
+        assert isinstance(disks[0], StorageInfo)
+        assert disks[0].total_gb is not None
+        assert disks[0].total_gb > 0
+
+
+def test_collect_network_returns_list():
+    from fetch import collect_network, CommandRunner, detect_os, NetworkInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        ifaces = collect_network(runner, os_type)
+        assert isinstance(ifaces, list)
+        assert len(ifaces) > 0
+        for iface in ifaces:
+            assert isinstance(iface, NetworkInfo)
+            assert len(iface.name) > 0

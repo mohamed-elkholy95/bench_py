@@ -704,3 +704,154 @@ def collect_gpu(run: CommandRunner, os_type: OSType) -> List[GpuInfo]:
                         gpus[i].vram_gb = round(int(v.strip()) / (1024 ** 3), 1)
 
     return gpus
+
+
+def collect_storage(run: CommandRunner, os_type: OSType) -> List[StorageInfo]:
+    disks: List[StorageInfo] = []
+
+    if HAS_PSUTIL:
+        try:
+            partitions = psutil.disk_partitions(all=False)
+            for part in partitions:
+                try:
+                    usage = psutil.disk_usage(part.mountpoint)
+                    disks.append(StorageInfo(
+                        device=part.device, mount_point=part.mountpoint,
+                        total_gb=round(usage.total / (1024 ** 3), 1),
+                        free_gb=round(usage.free / (1024 ** 3), 1),
+                        fs_type=part.fstype or None,
+                    ))
+                except (PermissionError, OSError):
+                    disks.append(StorageInfo(
+                        device=part.device, mount_point=part.mountpoint,
+                        fs_type=part.fstype or None,
+                    ))
+        except Exception:
+            pass
+
+    if not disks:
+        if os_type == OSType.MACOS:
+            df = run.run_or_none(["df", "-g", "/"])
+            if df:
+                lines = df.split("\n")
+                if len(lines) >= 2:
+                    parts = lines[1].split()
+                    disks.append(StorageInfo(
+                        device=parts[0], mount_point="/",
+                        total_gb=float(parts[1]), free_gb=float(parts[3]),
+                    ))
+        elif os_type == OSType.LINUX:
+            df = run.run_or_none(["df", "--block-size=G", "/"])
+            if df:
+                lines = df.split("\n")
+                if len(lines) >= 2:
+                    parts = lines[1].split()
+                    disks.append(StorageInfo(
+                        device=parts[0],
+                        mount_point=parts[5] if len(parts) > 5 else "/",
+                        total_gb=float(parts[1].rstrip("G")),
+                        free_gb=float(parts[3].rstrip("G")),
+                    ))
+        elif os_type == OSType.WINDOWS:
+            raw = run.run_or_none(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | "
+                 "Select-Object DeviceID,Size,FreeSpace | ConvertTo-Json"]
+            )
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        data = [data]
+                    for d in data:
+                        disks.append(StorageInfo(
+                            device=d.get("DeviceID", ""),
+                            mount_point=d.get("DeviceID", "") + "\\",
+                            total_gb=round(d["Size"] / (1024 ** 3), 1) if d.get("Size") else None,
+                            free_gb=round(d["FreeSpace"] / (1024 ** 3), 1) if d.get("FreeSpace") else None,
+                            fs_type="NTFS",
+                        ))
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+    for disk in disks:
+        if os_type == OSType.MACOS and disk.device:
+            di = run.run_or_none(["diskutil", "info", disk.device])
+            if di:
+                for line in di.split("\n"):
+                    if "Solid State" in line:
+                        disk.disk_type = "SSD" if "Yes" in line else "HDD"
+                    elif "Protocol" in line and "NVMe" in line:
+                        disk.disk_type = "NVMe"
+
+    return disks
+
+
+def collect_network(run: CommandRunner, os_type: OSType) -> List[NetworkInfo]:
+    ifaces: List[NetworkInfo] = []
+
+    if HAS_PSUTIL:
+        try:
+            addrs = psutil.net_if_addrs()
+            stats = {}
+            try:
+                stats = psutil.net_if_stats()
+            except Exception:
+                pass
+
+            for name, addr_list in addrs.items():
+                iface = NetworkInfo(name=name)
+                for addr in addr_list:
+                    if addr.family.name == "AF_INET":
+                        iface.ipv4 = addr.address
+                    elif addr.family.name == "AF_INET6":
+                        if not iface.ipv6:
+                            iface.ipv6 = addr.address
+                    elif addr.family.name in ("AF_LINK", "AF_PACKET"):
+                        iface.mac = addr.address
+
+                if name in stats:
+                    st = stats[name]
+                    iface.is_up = st.isup
+                    if st.speed > 0:
+                        iface.speed_mbps = st.speed
+
+                lower = name.lower()
+                if lower.startswith("lo") or lower == "lo0":
+                    iface.type = "Loopback"
+                elif "wi" in lower or "wlan" in lower or "airport" in lower:
+                    iface.type = "Wi-Fi"
+                elif "eth" in lower or "en" in lower or "eno" in lower:
+                    iface.type = "Ethernet"
+                elif "bridge" in lower or "br" in lower:
+                    iface.type = "Bridge"
+                elif "docker" in lower or "veth" in lower:
+                    iface.type = "Virtual"
+
+                ifaces.append(iface)
+        except Exception:
+            pass
+
+    if not ifaces and os_type == OSType.MACOS:
+        raw = run.run_or_none(["ifconfig"])
+        if raw:
+            current: Optional[NetworkInfo] = None
+            for line in raw.split("\n"):
+                if not line.startswith("\t") and ":" in line:
+                    if current:
+                        ifaces.append(current)
+                    iface_name = line.split(":")[0]
+                    current = NetworkInfo(name=iface_name, is_up="UP" in line)
+                elif current:
+                    stripped = line.strip()
+                    if stripped.startswith("inet "):
+                        current.ipv4 = stripped.split()[1]
+                    elif stripped.startswith("inet6 "):
+                        if not current.ipv6:
+                            current.ipv6 = stripped.split()[1]
+                    elif stripped.startswith("ether "):
+                        current.mac = stripped.split()[1]
+            if current:
+                ifaces.append(current)
+
+    return ifaces
