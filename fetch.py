@@ -1630,3 +1630,40 @@ def format_terminal(report: SystemReport, use_color: bool = True) -> str:
     lines.append("")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# JSON & Text formatters
+# ---------------------------------------------------------------------------
+
+def format_json(report: SystemReport) -> str:
+    """Serialize report to indented JSON string. None values omitted."""
+    return json.dumps(report_to_dict(report), indent=2, ensure_ascii=False)
+
+
+def format_text(report: SystemReport) -> str:
+    """Plain text version — same as terminal but no color."""
+    return format_terminal(report, use_color=False)
+
+
+def save_outputs(
+    report: SystemReport,
+    output_dir: str = ".",
+    json_only: bool = False,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Write output files. Returns (json_path, text_path)."""
+    os.makedirs(output_dir, exist_ok=True)
+
+    json_path = os.path.join(output_dir, "system_report.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        f.write(format_json(report))
+    log.info("Saved JSON to %s", json_path)
+
+    text_path = None
+    if not json_only:
+        text_path = os.path.join(output_dir, "system_report.txt")
+        with open(text_path, "w", encoding="utf-8") as f:
+            f.write(format_text(report))
+        log.info("Saved text to %s", text_path)
+
+    return json_path, text_path

@@ -348,3 +348,52 @@ def test_ansi_stripped_when_no_color():
     )
     output = format_terminal(report, use_color=False)
     assert "\033[" not in output
+
+
+import tempfile
+import os as _os
+
+
+def test_format_json_valid():
+    from fetch import format_json, SystemReport, OSInfo
+    report = SystemReport(
+        os=OSInfo(type="macOS", version="26.4", kernel="Darwin", arch="arm64", hostname="test"),
+        duration_seconds=1.0, timestamp="2026-04-13T18:00:00Z",
+    )
+    result = format_json(report)
+    parsed = json.loads(result)
+    assert parsed["os"]["type"] == "macOS"
+    assert "duration_seconds" in parsed
+    assert "battery" not in parsed
+
+
+def test_format_text_no_ansi():
+    from fetch import format_text, SystemReport, OSInfo
+    report = SystemReport(
+        os=OSInfo(type="Linux", version="Ubuntu 24", kernel="6.8", arch="x86_64", hostname="srv"),
+        duration_seconds=0.5, timestamp="2026-04-13T18:00:00Z",
+    )
+    result = format_text(report)
+    assert "\033[" not in result
+    assert "System Report" in result
+    assert "Ubuntu 24" in result
+
+
+def test_save_outputs_creates_files():
+    from fetch import save_outputs, SystemReport, OSInfo
+    report = SystemReport(
+        os=OSInfo(type="macOS", version="26.4", kernel="Darwin", arch="arm64", hostname="test"),
+        duration_seconds=0.5, timestamp="2026-04-13T18:00:00Z",
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_outputs(report, output_dir=tmpdir)
+        json_path = _os.path.join(tmpdir, "system_report.json")
+        text_path = _os.path.join(tmpdir, "system_report.txt")
+        assert _os.path.exists(json_path)
+        assert _os.path.exists(text_path)
+        with open(json_path) as f:
+            data = json.loads(f.read())
+            assert data["os"]["type"] == "macOS"
+        with open(text_path) as f:
+            content = f.read()
+            assert "System Report" in content
