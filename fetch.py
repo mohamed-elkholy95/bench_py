@@ -439,3 +439,268 @@ def _signal_handler(signum: int, _frame: Any) -> None:
     log.warning("Received %s — shutting down gracefully", sig_name)
     if _runner_ref is not None:
         _runner_ref.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Hardware collectors
+# ---------------------------------------------------------------------------
+
+def collect_cpu(run: CommandRunner, os_type: OSType) -> CpuInfo:
+    info = CpuInfo()
+
+    if HAS_PSUTIL:
+        try:
+            info.cores_logical = psutil.cpu_count(logical=True)
+            info.cores_physical = psutil.cpu_count(logical=False)
+        except Exception:
+            pass
+        try:
+            freq = psutil.cpu_freq()
+            if freq:
+                info.freq_mhz = freq.max or freq.current
+        except Exception:
+            pass
+
+    if os_type == OSType.MACOS:
+        model = run.run_or_none(["sysctl", "-n", "machdep.cpu.brand_string"])
+        if not model:
+            chip = run.run_or_none(["sysctl", "-n", "hw.chip"])
+            model = f"Apple {chip}" if chip else None
+        info.model = model
+        if info.cores_physical is None:
+            val = run.run_or_none(["sysctl", "-n", "hw.physicalcpu"])
+            if val:
+                info.cores_physical = int(val)
+        if info.cores_logical is None:
+            val = run.run_or_none(["sysctl", "-n", "hw.logicalcpu"])
+            if val:
+                info.cores_logical = int(val)
+        feats = run.run_or_none(["sysctl", "-n", "machdep.cpu.features"])
+        if feats:
+            info.features = feats.lower().split()
+
+    elif os_type == OSType.LINUX:
+        cpuinfo = run.run_or_none(["cat", "/proc/cpuinfo"])
+        if cpuinfo:
+            for line in cpuinfo.split("\n"):
+                if "model name" in line:
+                    info.model = line.split(":", 1)[1].strip()
+                    break
+            for line in cpuinfo.split("\n"):
+                if line.startswith("flags"):
+                    info.features = line.split(":", 1)[1].strip().split()
+                    break
+        if not info.model:
+            info.model = platform.processor() or None
+        if info.cores_logical is None:
+            val = run.run_or_none(["nproc", "--all"])
+            if val:
+                info.cores_logical = int(val)
+        if info.cores_physical is None:
+            lscpu = run.run_or_none(["lscpu"])
+            if lscpu:
+                cores_per = sockets = None
+                for line in lscpu.split("\n"):
+                    if "Core(s) per socket" in line:
+                        cores_per = int(line.split(":")[1].strip())
+                    elif "Socket(s)" in line:
+                        sockets = int(line.split(":")[1].strip())
+                if cores_per and sockets:
+                    info.cores_physical = cores_per * sockets
+
+    elif os_type == OSType.WINDOWS:
+        model = run.run_or_none(
+            ["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_Processor).Name"]
+        )
+        if model:
+            info.model = model.split("\n")[0].strip()
+        if info.cores_physical is None:
+            val = run.run_or_none(
+                ["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_Processor).NumberOfCores"]
+            )
+            if val:
+                info.cores_physical = int(val.strip())
+        if info.cores_logical is None:
+            val = run.run_or_none(
+                ["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_Processor).NumberOfLogicalProcessors"]
+            )
+            if val:
+                info.cores_logical = int(val.strip())
+
+    return info
+
+
+def collect_memory(run: CommandRunner, os_type: OSType) -> MemoryInfo:
+    info = MemoryInfo()
+
+    if HAS_PSUTIL:
+        try:
+            mem = psutil.virtual_memory()
+            info.total_gb = round(mem.total / (1024 ** 3), 1)
+        except Exception:
+            pass
+
+    if info.total_gb is None:
+        if os_type == OSType.MACOS:
+            val = run.run_or_none(["sysctl", "-n", "hw.memsize"])
+            if val:
+                info.total_gb = round(int(val) / (1024 ** 3), 1)
+        elif os_type == OSType.LINUX:
+            meminfo = run.run_or_none(["cat", "/proc/meminfo"])
+            if meminfo:
+                for line in meminfo.split("\n"):
+                    if "MemTotal" in line:
+                        kb = int(line.split(":")[1].strip().split()[0])
+                        info.total_gb = round(kb / (1024 ** 2), 1)
+                        break
+        elif os_type == OSType.WINDOWS:
+            val = run.run_or_none(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"]
+            )
+            if val:
+                info.total_gb = round(int(val.strip()) / (1024 ** 3), 1)
+
+    if os_type == OSType.MACOS:
+        sp = run.run_or_none(["system_profiler", "SPMemoryDataType"])
+        if sp:
+            for line in sp.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("Type:"):
+                    info.type = stripped.split(":", 1)[1].strip()
+                elif stripped.startswith("Speed:"):
+                    parts = stripped.split(":", 1)[1].strip().split()
+                    if parts and parts[0].isdigit():
+                        info.speed_mhz = int(parts[0])
+    elif os_type == OSType.LINUX:
+        dmi = run.run_or_none(["dmidecode", "-t", "memory"])
+        if dmi:
+            for line in dmi.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("Type:") and "Unknown" not in stripped:
+                    info.type = stripped.split(":", 1)[1].strip()
+                elif stripped.startswith("Speed:") and "Unknown" not in stripped:
+                    parts = stripped.split(":", 1)[1].strip().split()
+                    if parts and parts[0].isdigit():
+                        info.speed_mhz = int(parts[0])
+    elif os_type == OSType.WINDOWS:
+        mem_type_raw = run.run_or_none(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance Win32_PhysicalMemory)[0].SMBIOSMemoryType"]
+        )
+        if mem_type_raw:
+            type_map = {"26": "DDR4", "34": "DDR5", "24": "DDR3"}
+            info.type = type_map.get(mem_type_raw.strip(), None)
+        speed = run.run_or_none(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance Win32_PhysicalMemory)[0].Speed"]
+        )
+        if speed and speed.strip().isdigit():
+            info.speed_mhz = int(speed.strip())
+
+    return info
+
+
+def collect_gpu(run: CommandRunner, os_type: OSType) -> List[GpuInfo]:
+    gpus: List[GpuInfo] = []
+
+    if os_type == OSType.MACOS:
+        sp = run.run_or_none(["system_profiler", "SPDisplaysDataType"])
+        if sp:
+            current_gpu: Optional[GpuInfo] = None
+            for line in sp.split("\n"):
+                stripped = line.strip()
+                if "Chipset Model" in stripped or "Chip Model" in stripped:
+                    if current_gpu:
+                        gpus.append(current_gpu)
+                    model_name = stripped.split(":", 1)[1].strip()
+                    current_gpu = GpuInfo(model=model_name)
+                elif current_gpu and "VRAM" in stripped and ":" in stripped:
+                    val = stripped.split(":")[1].strip().split()
+                    if len(val) >= 2:
+                        num = float(val[0])
+                        if "MB" in val[1].upper():
+                            num /= 1024
+                        current_gpu.vram_gb = round(num, 1)
+            if current_gpu:
+                gpus.append(current_gpu)
+            for gpu in gpus:
+                if gpu.vram_gb is None and gpu.model and "Apple" in gpu.model:
+                    if HAS_PSUTIL:
+                        try:
+                            gpu.vram_gb = round(psutil.virtual_memory().total / (1024 ** 3), 1)
+                        except Exception:
+                            pass
+                    if gpu.vram_gb is None:
+                        val = run.run_or_none(["sysctl", "-n", "hw.memsize"])
+                        if val:
+                            gpu.vram_gb = round(int(val) / (1024 ** 3), 1)
+                    gpu.unified = True
+
+    elif os_type == OSType.LINUX:
+        nv_name = run.run_or_none(["nvidia-smi", "--query-gpu=gpu_name", "--format=csv,noheader"])
+        if nv_name:
+            nv_vram = run.run_or_none(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"])
+            for i, name in enumerate(nv_name.strip().split("\n")):
+                gpu = GpuInfo(model=name.strip())
+                if nv_vram:
+                    lines = nv_vram.strip().split("\n")
+                    if i < len(lines):
+                        gpu.vram_gb = round(float(lines[i].strip()) / 1024, 1)
+                gpus.append(gpu)
+        if not gpus:
+            rocm = run.run_or_none(["rocm-smi", "--showproductname"])
+            if rocm:
+                for line in rocm.split("\n"):
+                    if "GPU" in line and ":" in line:
+                        name = line.split(":", 1)[1].strip()
+                        gpus.append(GpuInfo(model=name))
+            rocm_vram = run.run_or_none(["rocm-smi", "--showmeminfo", "vram"])
+            if rocm_vram:
+                for line in rocm_vram.split("\n"):
+                    if "Total" in line:
+                        parts = line.split()
+                        for idx, p in enumerate(parts):
+                            if p == "Total" and idx + 2 < len(parts):
+                                mb = float(parts[idx + 2])
+                                if gpus:
+                                    gpus[0].vram_gb = round(mb / 1024, 1)
+                                break
+                        break
+        if not gpus:
+            lspci = run.run_or_none(["lspci"])
+            if lspci:
+                for line in lspci.split("\n"):
+                    if "VGA" in line or "3D" in line or "Display" in line:
+                        parts = line.split(":", 2)
+                        if len(parts) >= 3:
+                            gpus.append(GpuInfo(model=parts[2].strip()))
+
+    elif os_type == OSType.WINDOWS:
+        nv_name = run.run_or_none(["nvidia-smi", "--query-gpu=gpu_name", "--format=csv,noheader"])
+        if nv_name:
+            nv_vram = run.run_or_none(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"])
+            for i, name in enumerate(nv_name.strip().split("\n")):
+                gpu = GpuInfo(model=name.strip())
+                if nv_vram:
+                    lines = nv_vram.strip().split("\n")
+                    if i < len(lines):
+                        gpu.vram_gb = round(float(lines[i].strip()) / 1024, 1)
+                gpus.append(gpu)
+        if not gpus:
+            name = run.run_or_none(
+                ["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController).Name"]
+            )
+            if name:
+                for n in name.strip().split("\n"):
+                    if n.strip():
+                        gpus.append(GpuInfo(model=n.strip()))
+            vram_raw = run.run_or_none(
+                ["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController).AdapterRAM"]
+            )
+            if vram_raw and gpus:
+                for i, v in enumerate(vram_raw.strip().split("\n")):
+                    if v.strip().isdigit() and i < len(gpus):
+                        gpus[i].vram_gb = round(int(v.strip()) / (1024 ** 3), 1)
+
+    return gpus

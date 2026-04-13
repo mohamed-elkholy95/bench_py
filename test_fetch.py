@@ -165,3 +165,32 @@ def test_safe_collect_handles_exception():
         assert error.collector == "test"
         assert error.category == "unexpected"
         assert "boom" in error.message
+
+
+def test_collect_cpu_returns_cpu_info():
+    from fetch import collect_cpu, CommandRunner, detect_os, CpuInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        info = collect_cpu(runner, os_type)
+        assert isinstance(info, CpuInfo)
+        assert info.model is not None or info.cores_logical is not None
+
+
+def test_collect_memory_returns_memory_info():
+    from fetch import collect_memory, CommandRunner, detect_os, MemoryInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        info = collect_memory(runner, os_type)
+        assert isinstance(info, MemoryInfo)
+        assert info.total_gb is not None
+        assert info.total_gb > 0
+
+
+def test_collect_gpu_returns_list():
+    from fetch import collect_gpu, CommandRunner, detect_os, GpuInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        gpus = collect_gpu(runner, os_type)
+        assert isinstance(gpus, list)
+        for gpu in gpus:
+            assert isinstance(gpu, GpuInfo)
