@@ -397,3 +397,38 @@ def test_save_outputs_creates_files():
         with open(text_path) as f:
             content = f.read()
             assert "System Report" in content
+
+
+def test_parse_args_defaults():
+    from fetch import parse_args
+    args = parse_args([])
+    assert args.json_only is False
+    assert args.verbose is False
+    assert args.no_color is False
+    assert args.timeout == 15
+    assert args.output_dir == "."
+
+
+def test_parse_args_all_flags():
+    from fetch import parse_args
+    args = parse_args(["--json-only", "--verbose", "--no-color", "--timeout", "30", "--output-dir", "/tmp"])
+    assert args.json_only is True
+    assert args.verbose is True
+    assert args.no_color is True
+    assert args.timeout == 30
+    assert args.output_dir == "/tmp"
+
+
+def test_full_run_integration():
+    from fetch import run_collection, detect_os, CommandRunner
+    os_type = detect_os()
+    with CommandRunner(default_timeout=15) as runner:
+        report = run_collection(runner, os_type)
+        assert report.os is not None
+        assert report.os.type in ("macOS", "Linux", "Windows")
+        assert report.timestamp != ""
+        assert report.duration_seconds >= 0
+        from fetch import report_to_dict
+        d = report_to_dict(report)
+        assert "os" in d
+        assert "timestamp" in d

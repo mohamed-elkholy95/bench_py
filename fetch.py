@@ -1667,3 +1667,161 @@ def save_outputs(
         log.info("Saved text to %s", text_path)
 
     return json_path, text_path
+
+
+# ---------------------------------------------------------------------------
+# Collector registry
+# ---------------------------------------------------------------------------
+
+COLLECTORS: List[Tuple[str, Callable]] = [
+    ("os",         collect_os),
+    ("cpu",        collect_cpu),
+    ("memory",     collect_memory),
+    ("gpu",        collect_gpu),
+    ("storage",    collect_storage),
+    ("network",    collect_network),
+    ("battery",    collect_battery),
+    ("displays",   collect_displays),
+    ("audio",      collect_audio),
+    ("bluetooth",  collect_bluetooth),
+    ("sensors",    collect_sensors),
+    ("python",     collect_python),
+    ("dev_tools",  collect_dev_tools),
+    ("packages",   collect_packages),
+    ("services",   collect_services),
+]
+
+# ---------------------------------------------------------------------------
+# Collection runner
+# ---------------------------------------------------------------------------
+
+def run_collection(runner: CommandRunner, os_type: OSType) -> SystemReport:
+    """Run all collectors and assemble the SystemReport."""
+    report = SystemReport(
+        timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    )
+    start = time.monotonic()
+
+    for name, fn in COLLECTORS:
+        if runner._shutdown:
+            report.errors.append(CollectionError(
+                collector=name,
+                category="shutdown",
+                message="Skipped — shutdown in progress",
+            ))
+            continue
+
+        result, error = safe_collect(name, fn, runner, os_type)
+        if error:
+            report.errors.append(error)
+
+        # Map collector results to report fields
+        if name == "os" and result:
+            report.os = result
+        elif name == "cpu":
+            report.cpu = result
+        elif name == "memory":
+            report.memory = result
+        elif name == "gpu":
+            report.gpu = result or []
+        elif name == "storage":
+            report.storage = result or []
+        elif name == "network":
+            report.network = result or []
+        elif name == "battery":
+            report.battery = result
+        elif name == "displays":
+            report.displays = result or []
+        elif name == "audio":
+            report.audio = result or []
+        elif name == "bluetooth":
+            report.bluetooth = result or []
+        elif name == "sensors":
+            report.sensors = result
+        elif name == "python":
+            report.python = result
+        elif name == "dev_tools":
+            report.dev_tools = result or []
+        elif name == "packages":
+            report.packages = result or []
+        elif name == "services":
+            report.services = result or []
+
+    report.duration_seconds = round(time.monotonic() - start, 2)
+    return report
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="System Fetch — comprehensive system inventory",
+    )
+    parser.add_argument("--json-only", action="store_true",
+                        help="Output JSON only (no terminal, no text file)")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Debug logging with full tracebacks")
+    parser.add_argument("--no-color", action="store_true",
+                        help="Disable colored output")
+    parser.add_argument("--timeout", type=int, default=15,
+                        help="Per-collector timeout in seconds (default: 15)")
+    parser.add_argument("--output-dir", default=".",
+                        help="Directory for output files (default: current)")
+    return parser.parse_args(argv)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    global _runner_ref
+    args = parse_args()
+
+    level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    os_type = detect_os()
+    use_color = not args.no_color and not args.json_only and sys.stdout.isatty()
+    c = _Color(enabled=use_color)
+
+    log.info("Detected %s (%s)", os_type.value, platform.machine())
+
+    if not HAS_PSUTIL:
+        msg = "psutil not installed — using fallback detection (pip install psutil)"
+        if use_color:
+            print(f"  {c.yellow('[!]')} {msg}")
+        else:
+            log.warning(msg)
+
+    with CommandRunner(default_timeout=args.timeout) as runner:
+        _runner_ref = runner
+        signal.signal(signal.SIGINT, _signal_handler)
+        signal.signal(signal.SIGTERM, _signal_handler)
+        report = run_collection(runner, os_type)
+    _runner_ref = None
+
+    if not args.json_only:
+        print(format_terminal(report, use_color=use_color))
+
+    json_path, text_path = save_outputs(
+        report, output_dir=args.output_dir, json_only=args.json_only,
+    )
+
+    if not args.json_only:
+        print(f"  {c.green('JSON')}  {json_path}")
+        if text_path:
+            print(f"  {c.green('Text')}  {text_path}")
+        print()
+
+    sys.exit(0 if report.os else 1)
+
+
+if __name__ == "__main__":
+    main()
