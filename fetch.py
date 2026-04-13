@@ -855,3 +855,356 @@ def collect_network(run: CommandRunner, os_type: OSType) -> List[NetworkInfo]:
                 ifaces.append(current)
 
     return ifaces
+
+
+# ---------------------------------------------------------------------------
+# Peripheral collectors
+# ---------------------------------------------------------------------------
+
+def collect_battery(run: CommandRunner, os_type: OSType) -> Optional[BatteryInfo]:
+    if HAS_PSUTIL:
+        try:
+            bat = psutil.sensors_battery()
+            if bat is not None:
+                time_left = None
+                if bat.secsleft > 0:
+                    time_left = int(bat.secsleft / 60)
+                return BatteryInfo(
+                    percent=round(bat.percent, 1),
+                    plugged_in=bat.power_plugged,
+                    time_remaining_min=time_left,
+                )
+            return None
+        except Exception:
+            pass
+
+    if os_type == OSType.MACOS:
+        raw = run.run_or_none(["pmset", "-g", "batt"])
+        if raw and "InternalBattery" in raw:
+            info = BatteryInfo()
+            for line in raw.split("\n"):
+                if "InternalBattery" in line:
+                    parts = line.split("\t")
+                    for part in parts:
+                        part = part.strip()
+                        if "%" in part:
+                            # Extract the numeric value before any "%" — handles
+                            # formats like "80%" or "80; AC attached; not charging"
+                            pct_str = part.split("%")[0].split(";")[0].strip()
+                            try:
+                                info.percent = float(pct_str)
+                            except ValueError:
+                                pass
+                        if "charging" in part.lower() or "ac power" in part.lower():
+                            info.plugged_in = True
+            return info
+    elif os_type == OSType.LINUX:
+        upower = run.run_or_none(["upower", "-i", "/org/freedesktop/UPower/devices/battery_BAT0"])
+        if upower:
+            info = BatteryInfo()
+            for line in upower.split("\n"):
+                stripped = line.strip()
+                if "percentage:" in stripped:
+                    val = stripped.split(":")[1].strip().replace("%", "")
+                    info.percent = float(val)
+                elif "state:" in stripped:
+                    info.plugged_in = "charging" in stripped or "fully-charged" in stripped
+                elif "time to empty:" in stripped:
+                    parts = stripped.split(":")[1].strip().split()
+                    if parts:
+                        try:
+                            hours = float(parts[0])
+                            info.time_remaining_min = int(hours * 60)
+                        except ValueError:
+                            pass
+            return info if info.percent is not None else None
+    elif os_type == OSType.WINDOWS:
+        raw = run.run_or_none(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Battery | Select-Object EstimatedChargeRemaining,BatteryStatus | ConvertTo-Json"]
+        )
+        if raw:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    data = data[0]
+                return BatteryInfo(
+                    percent=float(data.get("EstimatedChargeRemaining", 0)),
+                    plugged_in=data.get("BatteryStatus", 0) == 2,
+                )
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+    return None
+
+
+def collect_displays(run: CommandRunner, os_type: OSType) -> List[DisplayInfo]:
+    displays: List[DisplayInfo] = []
+
+    if os_type == OSType.MACOS:
+        sp = run.run_or_none(["system_profiler", "SPDisplaysDataType"])
+        if sp:
+            current: Optional[DisplayInfo] = None
+            in_displays_section = False
+            for line in sp.split("\n"):
+                stripped = line.strip()
+                if "Displays:" in stripped:
+                    in_displays_section = True
+                    continue
+                if in_displays_section:
+                    if "Resolution" in stripped:
+                        if current is None:
+                            current = DisplayInfo()
+                        res = stripped.split(":", 1)[1].strip()
+                        res_clean = res.split("@")[0].strip()
+                        current.resolution = res_clean.replace(" ", "")
+                    elif stripped.endswith(":") and not stripped.startswith("Displays"):
+                        if current:
+                            displays.append(current)
+                        current = DisplayInfo(name=stripped.rstrip(":"))
+                if "Hz" in stripped:
+                    for word in stripped.split():
+                        cleaned = word.replace("Hz", "").strip()
+                        if cleaned.isdigit():
+                            if current:
+                                current.refresh_rate_hz = int(cleaned)
+            if current:
+                displays.append(current)
+
+    elif os_type == OSType.LINUX:
+        xrandr = run.run_or_none(["xrandr", "--query"])
+        if xrandr:
+            for line in xrandr.split("\n"):
+                if " connected " in line:
+                    parts = line.split()
+                    name = parts[0]
+                    disp = DisplayInfo(name=name)
+                    for part in parts:
+                        if "x" in part and "+" in part:
+                            res = part.split("+")[0]
+                            disp.resolution = res
+                            break
+                    displays.append(disp)
+                elif "*" in line and displays:
+                    parts = line.strip().split()
+                    for part in parts:
+                        if "*" in part:
+                            hz = part.replace("*", "").replace("+", "")
+                            try:
+                                displays[-1].refresh_rate_hz = int(float(hz))
+                            except ValueError:
+                                pass
+
+    elif os_type == OSType.WINDOWS:
+        raw = run.run_or_none(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_VideoController | "
+             "Select-Object Name,CurrentHorizontalResolution,"
+             "CurrentVerticalResolution,CurrentRefreshRate | ConvertTo-Json"]
+        )
+        if raw:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    data = [data]
+                for d in data:
+                    h = d.get("CurrentHorizontalResolution")
+                    v = d.get("CurrentVerticalResolution")
+                    res = f"{h}x{v}" if h and v else None
+                    displays.append(DisplayInfo(
+                        name=d.get("Name"), resolution=res,
+                        refresh_rate_hz=d.get("CurrentRefreshRate"),
+                    ))
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+    return displays
+
+
+def collect_audio(run: CommandRunner, os_type: OSType) -> List[AudioInfo]:
+    devices: List[AudioInfo] = []
+
+    if os_type == OSType.MACOS:
+        sp = run.run_or_none(["system_profiler", "SPAudioDataType"])
+        if sp:
+            current_name: Optional[str] = None
+            for line in sp.split("\n"):
+                stripped = line.strip()
+                if stripped.endswith(":") and not stripped.startswith("Audio") and len(stripped) > 1:
+                    current_name = stripped.rstrip(":")
+                elif current_name:
+                    if "Default Output Device: Yes" in stripped:
+                        devices.append(AudioInfo(name=current_name, type="output"))
+                        current_name = None
+                    elif "Default Input Device: Yes" in stripped:
+                        devices.append(AudioInfo(name=current_name, type="input"))
+                        current_name = None
+
+    elif os_type == OSType.LINUX:
+        pactl = run.run_or_none(["pactl", "list", "sinks", "short"])
+        if pactl:
+            for line in pactl.split("\n"):
+                parts = line.split("\t")
+                if len(parts) >= 2:
+                    devices.append(AudioInfo(name=parts[1], type="output"))
+        pactl_src = run.run_or_none(["pactl", "list", "sources", "short"])
+        if pactl_src:
+            for line in pactl_src.split("\n"):
+                parts = line.split("\t")
+                if len(parts) >= 2 and "monitor" not in parts[1].lower():
+                    devices.append(AudioInfo(name=parts[1], type="input"))
+        if not devices:
+            aplay = run.run_or_none(["aplay", "-l"])
+            if aplay:
+                for line in aplay.split("\n"):
+                    if line.startswith("card "):
+                        name = line.split(":")[1].strip() if ":" in line else line
+                        devices.append(AudioInfo(name=name, type="output"))
+
+    elif os_type == OSType.WINDOWS:
+        raw = run.run_or_none(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_SoundDevice | Select-Object Name,StatusInfo | ConvertTo-Json"]
+        )
+        if raw:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    data = [data]
+                for d in data:
+                    devices.append(AudioInfo(name=d.get("Name", "Unknown"), type="output"))
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+    return devices
+
+
+def collect_bluetooth(run: CommandRunner, os_type: OSType) -> List[BluetoothInfo]:
+    devices: List[BluetoothInfo] = []
+
+    if os_type == OSType.MACOS:
+        sp = run.run_or_none(["system_profiler", "SPBluetoothDataType"])
+        if sp:
+            current_name: Optional[str] = None
+            current_connected = False
+            current_type: Optional[str] = None
+            in_devices = False
+            for line in sp.split("\n"):
+                stripped = line.strip()
+                if "Connected:" in stripped or "Devices" in stripped:
+                    in_devices = True
+                    continue
+                if in_devices and stripped.endswith(":") and len(stripped) > 1:
+                    if current_name:
+                        devices.append(BluetoothInfo(
+                            name=current_name, connected=current_connected, device_type=current_type,
+                        ))
+                    current_name = stripped.rstrip(":")
+                    current_connected = False
+                    current_type = None
+                elif current_name:
+                    if "Connected: Yes" in stripped:
+                        current_connected = True
+                    elif "Minor Type:" in stripped:
+                        current_type = stripped.split(":", 1)[1].strip().lower()
+            if current_name:
+                devices.append(BluetoothInfo(
+                    name=current_name, connected=current_connected, device_type=current_type,
+                ))
+
+    elif os_type == OSType.LINUX:
+        paired = run.run_or_none(["bluetoothctl", "devices"])
+        if paired:
+            for line in paired.split("\n"):
+                parts = line.strip().split(" ", 2)
+                if len(parts) >= 3 and parts[0] == "Device":
+                    mac = parts[1]
+                    name = parts[2]
+                    info_raw = run.run_or_none(["bluetoothctl", "info", mac])
+                    connected = False
+                    if info_raw and "Connected: yes" in info_raw:
+                        connected = True
+                    devices.append(BluetoothInfo(name=name, connected=connected))
+
+    elif os_type == OSType.WINDOWS:
+        raw = run.run_or_none(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPClass -eq 'Bluetooth' } | "
+             "Select-Object Name,Status | ConvertTo-Json"]
+        )
+        if raw:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    data = [data]
+                for d in data:
+                    name = d.get("Name", "")
+                    if name and "Bluetooth" not in name:
+                        devices.append(BluetoothInfo(
+                            name=name, connected=d.get("Status") == "OK",
+                        ))
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+    return devices
+
+
+def collect_sensors(run: CommandRunner, os_type: OSType) -> Optional[SensorInfo]:
+    temps: Dict[str, float] = {}
+    fans: Dict[str, int] = {}
+
+    if HAS_PSUTIL:
+        try:
+            t = psutil.sensors_temperatures()
+            if t:
+                for group_name, entries in t.items():
+                    for entry in entries:
+                        label = entry.label or group_name
+                        temps[label] = entry.current
+        except (AttributeError, Exception):
+            pass
+        try:
+            f = psutil.sensors_fans()
+            if f:
+                for group_name, entries in f.items():
+                    for entry in entries:
+                        label = entry.label or group_name
+                        fans[label] = entry.current
+        except (AttributeError, Exception):
+            pass
+
+    if not temps and os_type == OSType.MACOS:
+        raw = run.run_or_none(["osx-cpu-temp"])
+        if raw:
+            for line in raw.split("\n"):
+                if "CPU" in line and "°C" in line:
+                    val = line.split(":")[1].strip().replace("°C", "").strip()
+                    try:
+                        temps["CPU"] = float(val)
+                    except ValueError:
+                        pass
+
+    if not temps and os_type == OSType.LINUX:
+        raw = run.run_or_none(["sensors"])
+        if raw:
+            current_group = ""
+            for line in raw.split("\n"):
+                if not line.startswith(" ") and line.strip():
+                    current_group = line.strip()
+                elif "°C" in line and ":" in line:
+                    label = line.split(":")[0].strip()
+                    val_str = line.split(":")[1].strip().split("°C")[0].strip().lstrip("+")
+                    try:
+                        temps[f"{current_group}/{label}"] = float(val_str)
+                    except ValueError:
+                        pass
+                elif "RPM" in line and ":" in line:
+                    label = line.split(":")[0].strip()
+                    val_str = line.split(":")[1].strip().split("RPM")[0].strip()
+                    try:
+                        fans[f"{current_group}/{label}"] = int(float(val_str))
+                    except ValueError:
+                        pass
+
+    if temps or fans:
+        return SensorInfo(temperatures=temps, fan_speeds=fans)
+    return None

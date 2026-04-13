@@ -218,3 +218,49 @@ def test_collect_network_returns_list():
         for iface in ifaces:
             assert isinstance(iface, NetworkInfo)
             assert len(iface.name) > 0
+
+
+def test_collect_battery_returns_optional():
+    from fetch import collect_battery, CommandRunner, detect_os, BatteryInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        result = collect_battery(runner, os_type)
+        assert result is None or isinstance(result, BatteryInfo)
+
+
+def test_collect_displays_returns_list():
+    from fetch import collect_displays, CommandRunner, detect_os, DisplayInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        result = collect_displays(runner, os_type)
+        assert isinstance(result, list)
+        for d in result:
+            assert isinstance(d, DisplayInfo)
+
+
+def test_collect_audio_returns_list():
+    from fetch import collect_audio, CommandRunner, detect_os, AudioInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        result = collect_audio(runner, os_type)
+        assert isinstance(result, list)
+        for a in result:
+            assert isinstance(a, AudioInfo)
+
+
+def test_collect_bluetooth_returns_list():
+    from fetch import collect_bluetooth, CommandRunner, detect_os, BluetoothInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        result = collect_bluetooth(runner, os_type)
+        assert isinstance(result, list)
+        for b in result:
+            assert isinstance(b, BluetoothInfo)
+
+
+def test_collect_sensors_returns_optional():
+    from fetch import collect_sensors, CommandRunner, detect_os, SensorInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        result = collect_sensors(runner, os_type)
+        assert result is None or isinstance(result, SensorInfo)
