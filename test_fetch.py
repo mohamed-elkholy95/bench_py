@@ -117,3 +117,51 @@ def test_dataclass_json_roundtrip():
     assert loaded["timestamp"] == "2026-04-13T18:00:00Z"
     assert "battery" not in loaded
     assert "sensors" not in loaded
+
+
+def test_detect_os_returns_valid_enum():
+    """detect_os() returns a known OSType member."""
+    from fetch import detect_os, OSType
+    result = detect_os()
+    assert isinstance(result, OSType)
+    assert result != OSType.UNKNOWN
+
+
+def test_collect_os_returns_os_info():
+    """collect_os() returns populated OSInfo."""
+    from fetch import collect_os, CommandRunner, detect_os, OSInfo
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        info = collect_os(runner, os_type)
+        assert isinstance(info, OSInfo)
+        assert info.type in ("macOS", "Linux", "Windows")
+        assert len(info.hostname) > 0
+        assert len(info.arch) > 0
+        assert len(info.kernel) > 0
+
+
+def test_safe_collect_success():
+    """safe_collect returns (result, None) on success."""
+    from fetch import safe_collect, CommandRunner, detect_os, collect_os
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        result, error = safe_collect("os", collect_os, runner, os_type)
+        assert result is not None
+        assert error is None
+
+
+def test_safe_collect_handles_exception():
+    """safe_collect returns (None, CollectionError) when collector raises."""
+    from fetch import safe_collect, CommandRunner, detect_os, CollectionError
+
+    def bad_collector(runner, os_type):
+        raise RuntimeError("boom")
+
+    os_type = detect_os()
+    with CommandRunner() as runner:
+        result, error = safe_collect("test", bad_collector, runner, os_type)
+        assert result is None
+        assert isinstance(error, CollectionError)
+        assert error.collector == "test"
+        assert error.category == "unexpected"
+        assert "boom" in error.message

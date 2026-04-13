@@ -348,3 +348,94 @@ def _clean_none(d: Any) -> Any:
 def report_to_dict(report: SystemReport) -> Dict[str, Any]:
     """Convert a SystemReport to a JSON-friendly dict with None values removed."""
     return _clean_none(asdict(report))
+
+
+# ---------------------------------------------------------------------------
+# OS detection
+# ---------------------------------------------------------------------------
+
+def detect_os() -> OSType:
+    """Detect the current operating system."""
+    system = platform.system().lower()
+    mapping = {"darwin": OSType.MACOS, "linux": OSType.LINUX, "windows": OSType.WINDOWS}
+    return mapping.get(system, OSType.UNKNOWN)
+
+
+# ---------------------------------------------------------------------------
+# First collector: OS info
+# ---------------------------------------------------------------------------
+
+def collect_os(run: CommandRunner, os_type: OSType) -> OSInfo:
+    """Collect operating system information. Pure stdlib — no psutil needed."""
+    hostname = platform.node() or "unknown"
+    arch = platform.machine() or "unknown"
+    kernel = platform.platform() or "unknown"
+
+    version = ""
+    if os_type == OSType.MACOS:
+        v = platform.mac_ver()[0]
+        version = v if v else kernel
+    elif os_type == OSType.LINUX:
+        try:
+            import distro
+            version = f"{distro.name()} {distro.version()}"
+        except ImportError:
+            version = platform.version()
+    elif os_type == OSType.WINDOWS:
+        version = platform.version()
+    else:
+        version = platform.version()
+
+    return OSInfo(
+        type=os_type.value,
+        version=version,
+        kernel=kernel,
+        arch=arch,
+        hostname=hostname,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+def safe_collect(
+    name: str,
+    fn: Callable,
+    runner: CommandRunner,
+    os_type: OSType,
+) -> Tuple[Any, Optional[CollectionError]]:
+    """Run a collector safely. Returns (result, error_or_none)."""
+    try:
+        result = fn(runner, os_type)
+        log.info("Collected %s", name)
+        return result, None
+    except InterruptedError:
+        log.warning("Skipped %s (shutdown)", name)
+        return None, CollectionError(
+            collector=name,
+            category="shutdown",
+            message="Skipped — shutdown in progress",
+        )
+    except Exception as exc:
+        log.warning("Failed to collect %s — %s", name, exc)
+        return None, CollectionError(
+            collector=name,
+            category=classify_error(exc),
+            message=str(exc),
+            suggestion=suggest_fix(name, exc),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Signal handling
+# ---------------------------------------------------------------------------
+
+_runner_ref: Optional[CommandRunner] = None
+
+
+def _signal_handler(signum: int, _frame: Any) -> None:
+    sig_name = signal.Signals(signum).name
+    log.warning("Received %s — shutting down gracefully", sig_name)
+    if _runner_ref is not None:
+        _runner_ref.shutdown()
