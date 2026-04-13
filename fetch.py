@@ -1429,3 +1429,204 @@ def collect_services(run: CommandRunner, os_type: OSType) -> List[ServiceInfo]:
                 services.append(ServiceInfo(name=svc, status=status))
 
     return services
+
+
+# ---------------------------------------------------------------------------
+# ANSI color helpers
+# ---------------------------------------------------------------------------
+
+class _Color:
+    """ANSI escape code wrapper. All methods return plain text if disabled."""
+    def __init__(self, enabled: bool = True) -> None:
+        self.enabled = enabled
+
+    def _wrap(self, code: str, text: str) -> str:
+        if not self.enabled:
+            return text
+        return f"\033[{code}m{text}\033[0m"
+
+    def green(self, t: str) -> str: return self._wrap("32", t)
+    def yellow(self, t: str) -> str: return self._wrap("33", t)
+    def red(self, t: str) -> str: return self._wrap("31", t)
+    def dim(self, t: str) -> str: return self._wrap("2", t)
+    def bold(self, t: str) -> str: return self._wrap("1", t)
+    def cyan(self, t: str) -> str: return self._wrap("36", t)
+
+# ---------------------------------------------------------------------------
+# Terminal output formatter
+# ---------------------------------------------------------------------------
+
+def format_terminal(report: SystemReport, use_color: bool = True) -> str:
+    """Format the report as a human-readable terminal string."""
+    c = _Color(enabled=use_color)
+    lines: List[str] = []
+    W = 58  # display width
+
+    # Header
+    sep = "=" * W if not use_color else "\u2550" * W
+    lines.append("")
+    lines.append(c.bold(f"{'System Report':^{W}}"))
+    hostname = report.os.hostname if report.os else "unknown"
+    subtitle = f"{report.timestamp[:19]} | {hostname}"
+    lines.append(c.dim(f"{subtitle:^{W}}"))
+    lines.append(sep)
+
+    def section(title: str) -> None:
+        lines.append("")
+        lines.append(c.bold(c.cyan(f" {title}")))
+
+    def row(label: str, value: str) -> None:
+        lines.append(f"  {label:<16}{value}")
+
+    # OS & Hardware
+    section("OS & Hardware")
+    if report.os:
+        row("OS", f"{report.os.type} {report.os.version} ({report.os.arch})")
+    if report.cpu:
+        cores = ""
+        if report.cpu.cores_physical or report.cpu.cores_logical:
+            p = report.cpu.cores_physical or "?"
+            l = report.cpu.cores_logical or "?"
+            freq = f" @ {report.cpu.freq_mhz:.0f} MHz" if report.cpu.freq_mhz else ""
+            cores = f" -- {p} cores / {l} threads{freq}"
+        row("CPU", f"{report.cpu.model or 'Unknown'}{cores}")
+    if report.memory:
+        mem_extra = ""
+        if report.memory.type:
+            mem_extra += f" {report.memory.type}"
+        if report.memory.speed_mhz:
+            mem_extra += f" @ {report.memory.speed_mhz} MHz"
+        row("Memory", f"{report.memory.total_gb} GB{mem_extra}")
+    for gpu in report.gpu:
+        vram = ""
+        if gpu.vram_gb:
+            unified = " (unified)" if gpu.unified else ""
+            vram = f" ({gpu.vram_gb} GB VRAM{unified})"
+        row("GPU", f"{gpu.model or 'Unknown'}{vram}")
+
+    # Storage
+    if report.storage:
+        section("Storage")
+        for disk in report.storage:
+            dtype = f" {disk.disk_type}" if disk.disk_type else ""
+            fs = f" {disk.fs_type}" if disk.fs_type else ""
+            free = f" -- {disk.free_gb} GB free" if disk.free_gb else ""
+            row(disk.device[:16], f"{disk.total_gb} GB{fs}{dtype}{free}")
+
+    # Network
+    if report.network:
+        section("Network")
+        for iface in report.network:
+            parts = []
+            if iface.ipv4:
+                parts.append(iface.ipv4)
+            if iface.speed_mbps:
+                parts.append(f"{iface.speed_mbps} Mbps")
+            if iface.mac:
+                parts.append(iface.mac)
+            itype = f" ({iface.type})" if iface.type else ""
+            status = c.green("UP") if iface.is_up else c.dim("DOWN")
+            detail = " | ".join(parts)
+            row(f"{iface.name}{itype}"[:16], f"{status} {detail}")
+
+    # Battery
+    if report.battery:
+        section("Battery")
+        plug = "Plugged in" if report.battery.plugged_in else "On battery"
+        time_left = ""
+        if report.battery.time_remaining_min is not None:
+            h = report.battery.time_remaining_min // 60
+            m = report.battery.time_remaining_min % 60
+            time_left = f" | {h}h{m:02d}m remaining"
+        row("Battery", f"{report.battery.percent}% | {plug}{time_left}")
+
+    # Peripherals
+    has_peripherals = report.displays or report.audio or report.bluetooth
+    if has_peripherals:
+        section("Peripherals")
+        for d in report.displays:
+            res = d.resolution or "?"
+            hz = f" @ {d.refresh_rate_hz}Hz" if d.refresh_rate_hz else ""
+            row("Display", f"{d.name or 'Unknown'} ({res}{hz})")
+        for a in report.audio:
+            row("Audio", f"{a.name} ({a.type})")
+        for b in report.bluetooth:
+            conn = c.green("connected") if b.connected else c.dim("paired")
+            btype = f" [{b.device_type}]" if b.device_type else ""
+            row("Bluetooth", f"{b.name} ({conn}){btype}")
+
+    # Sensors
+    if report.sensors:
+        section("Sensors")
+        for name, temp in report.sensors.temperatures.items():
+            row(name[:16], f"{temp:.1f} C")
+        for name, rpm in report.sensors.fan_speeds.items():
+            row(name[:16], f"{rpm} RPM")
+
+    # Python
+    if report.python:
+        section("Python")
+        for inst in report.python.installations:
+            row("Python " + inst.version, inst.path)
+        if report.python.virtual_envs:
+            conda_envs = [e for e in report.python.virtual_envs if e.type == "conda"]
+            venvs = [e for e in report.python.virtual_envs if e.type == "venv"]
+            if conda_envs:
+                names = ", ".join(e.name for e in conda_envs[:6])
+                extra = f" (+{len(conda_envs) - 6} more)" if len(conda_envs) > 6 else ""
+                row("Conda envs", f"{names}{extra}")
+            for v in venvs:
+                row("Venv", v.path)
+        if report.python.active_env:
+            row("Active env", report.python.active_env)
+
+    # Dev Tools
+    if report.dev_tools:
+        section("Dev Tools")
+        tool_strs = []
+        for t in report.dev_tools:
+            ver = f" {t.version}" if t.version else ""
+            tool_strs.append(f"{t.name}{ver}")
+        for i in range(0, len(tool_strs), 4):
+            chunk = tool_strs[i:i + 4]
+            row("", "    ".join(f"{s:<18}" for s in chunk))
+
+    # Packages
+    if report.packages:
+        section("Packages")
+        for pkg in report.packages:
+            row(pkg.manager, f"{pkg.count} packages")
+
+    # Services
+    if report.services:
+        section("Services")
+        running = [s for s in report.services if s.status == "running"]
+        stopped = [s for s in report.services if s.status != "running"]
+        if running:
+            row("Running", ", ".join(s.name for s in running))
+        if stopped:
+            row("Stopped", ", ".join(s.name for s in stopped))
+
+    # Errors
+    if report.errors:
+        lines.append("")
+        lines.append(c.red(c.bold(" Errors")))
+        for err in report.errors:
+            indicator = c.red("[X]") if err.category != "shutdown" else c.dim("[-]")
+            suggestion = f" -- {err.suggestion}" if err.suggestion else ""
+            lines.append(f"  {indicator} {err.collector:<16}{err.message}{suggestion}")
+
+    # Footer
+    lines.append("")
+    lines.append("=" * W if not use_color else "\u2501" * W)
+    n_ok = 15 - len(report.errors)
+    n_err = len(report.errors)
+    lines.append(
+        f"Completed in {report.duration_seconds:.1f}s -- "
+        f"{c.green(str(n_ok) + ' succeeded')}, "
+        f"{c.red(str(n_err) + ' failed') if n_err else '0 failed'}"
+    )
+    lines.append("=" * W if not use_color else "\u2501" * W)
+    lines.append("")
+
+    return "\n".join(lines)

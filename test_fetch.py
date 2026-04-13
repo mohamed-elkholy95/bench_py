@@ -303,3 +303,48 @@ def test_collect_services_returns_list():
         assert isinstance(services, list)
         for s in services:
             assert isinstance(s, ServiceInfo)
+
+
+def test_format_terminal_produces_output():
+    from fetch import format_terminal, SystemReport, OSInfo, CpuInfo, MemoryInfo
+    report = SystemReport(
+        os=OSInfo(type="macOS", version="26.4", kernel="Darwin 25.4", arch="arm64", hostname="test-mac"),
+        cpu=CpuInfo(model="Apple M4 Max", cores_physical=14, cores_logical=14, freq_mhz=4050.0, features=[]),
+        memory=MemoryInfo(total_gb=36.0, type="DDR5", speed_mhz=None),
+        gpu=[], storage=[], network=[], battery=None,
+        displays=[], audio=[], bluetooth=[],
+        sensors=None, python=None, dev_tools=[],
+        packages=[], services=[], errors=[],
+        duration_seconds=2.5, timestamp="2026-04-13T18:00:00Z",
+    )
+    output = format_terminal(report, use_color=False)
+    assert "System Report" in output
+    assert "Apple M4 Max" in output
+    assert "36.0" in output
+    assert "test-mac" in output
+    assert "2.5s" in output
+
+
+def test_format_terminal_with_errors():
+    from fetch import format_terminal, SystemReport, OSInfo, CollectionError
+    report = SystemReport(
+        os=OSInfo(type="Linux", version="Ubuntu 24.04", kernel="6.8.0", arch="x86_64", hostname="dev"),
+        errors=[CollectionError(
+            collector="bluetooth", category="permission_denied",
+            message="Permission denied", suggestion="Run with sudo",
+        )],
+        duration_seconds=1.0, timestamp="2026-04-13T18:00:00Z",
+    )
+    output = format_terminal(report, use_color=False)
+    assert "bluetooth" in output.lower()
+    assert "Permission denied" in output or "permission_denied" in output
+
+
+def test_ansi_stripped_when_no_color():
+    from fetch import format_terminal, SystemReport, OSInfo
+    report = SystemReport(
+        os=OSInfo(type="macOS", version="26.4", kernel="Darwin", arch="arm64", hostname="test"),
+        duration_seconds=0.5, timestamp="2026-04-13T18:00:00Z",
+    )
+    output = format_terminal(report, use_color=False)
+    assert "\033[" not in output
