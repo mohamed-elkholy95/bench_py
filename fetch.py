@@ -284,7 +284,7 @@ class CommandRunner:
         """Execute command and return stripped stdout. Raises on any failure."""
         if self._shutdown:
             raise InterruptedError("Shutdown requested")
-        timeout = timeout or self.default_timeout
+        timeout = timeout if timeout is not None else self.default_timeout
         try:
             proc = subprocess.Popen(
                 command,
@@ -1331,11 +1331,16 @@ def collect_dev_tools(run: CommandRunner, os_type: OSType) -> List[DevTool]:
                 version_cmd,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
-            stdout, stderr = proc.communicate(timeout=5)
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                stdout, stderr = "", ""
             raw = stdout.strip() or stderr.strip()
             if raw:
                 version = _parse_version(name, raw)
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        except (FileNotFoundError, OSError):
             pass
         tools.append(DevTool(name=name, version=version, path=path.strip()))
     return tools
@@ -1624,7 +1629,8 @@ def format_terminal(report: SystemReport, use_color: bool = True) -> str:
     # Footer
     lines.append("")
     lines.append("=" * W if not use_color else "\u2501" * W)
-    n_ok = 15 - len(report.errors)
+    total_collectors = 15  # len(COLLECTORS) — defined later in file
+    n_ok = total_collectors - len(report.errors)
     n_err = len(report.errors)
     lines.append(
         f"Completed in {report.duration_seconds:.1f}s -- "
@@ -1812,7 +1818,9 @@ def main() -> None:
         report = run_collection(runner, os_type)
     _runner_ref = None
 
-    if not args.json_only:
+    if args.json_only:
+        print(format_json(report))
+    else:
         print(format_terminal(report, use_color=use_color))
 
     json_path, text_path = save_outputs(
