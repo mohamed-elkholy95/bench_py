@@ -412,3 +412,27 @@ def test_bench_gpu_batch_matmul():
     if not HAS_MLX:
         pytest.skip("MLX not available")
     assert bench_gpu_batch_matmul(4, 128) > 0
+
+
+# ---------------------------------------------------------------------------
+# Task 9: Memory benchmarks
+# ---------------------------------------------------------------------------
+
+def test_bench_mem_seq_read():
+    from bench import bench_mem_seq_read
+    assert bench_mem_seq_read(16) > 0
+
+
+def test_bench_mem_seq_write():
+    from bench import bench_mem_seq_write
+    assert bench_mem_seq_write(16) > 0
+
+
+def test_bench_mem_random_access():
+    from bench import bench_mem_random_access
+    assert bench_mem_random_access(16, 100_000) > 0
+
+
+def test_bench_mem_copy():
+    from bench import bench_mem_copy
+    assert bench_mem_copy(16) > 0

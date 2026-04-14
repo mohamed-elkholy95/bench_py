@@ -829,3 +829,59 @@ def bench_gpu_batch_matmul(batch: int = 64, size: int = 512) -> float:
     elapsed = time.monotonic() - start
     flops = 2.0 * batch * size ** 3
     return flops / elapsed / 1e9
+
+
+# ---------------------------------------------------------------------------
+# Task 9: Memory Benchmarks
+# ---------------------------------------------------------------------------
+
+def bench_mem_seq_read(size_mb: int = 256) -> float:
+    """Sequential numpy array read. Returns GB/s."""
+    if not HAS_NUMPY:
+        raise ImportError("numpy is required for bench_mem_seq_read")
+    n_elements = (size_mb * 1024 * 1024) // 8  # float64 = 8 bytes
+    arr = np.ones(n_elements, dtype=np.float64)
+    start = time.monotonic()
+    _ = np.sum(arr)
+    elapsed = time.monotonic() - start
+    bytes_read = n_elements * 8
+    return bytes_read / elapsed / 1e9
+
+
+def bench_mem_seq_write(size_mb: int = 256) -> float:
+    """Sequential numpy array write. Returns GB/s."""
+    if not HAS_NUMPY:
+        raise ImportError("numpy is required for bench_mem_seq_write")
+    n_elements = (size_mb * 1024 * 1024) // 8
+    arr = np.empty(n_elements, dtype=np.float64)
+    start = time.monotonic()
+    arr[:] = 1.0
+    elapsed = time.monotonic() - start
+    bytes_written = n_elements * 8
+    return bytes_written / elapsed / 1e9
+
+
+def bench_mem_random_access(size_mb: int = 256, accesses: int = 1_000_000) -> float:
+    """Random index reads. Returns M_accesses/sec."""
+    if not HAS_NUMPY:
+        raise ImportError("numpy is required for bench_mem_random_access")
+    n_elements = (size_mb * 1024 * 1024) // 8
+    arr = np.ones(n_elements, dtype=np.float64)
+    indices = np.random.randint(0, n_elements, size=accesses, dtype=np.int64)
+    start = time.monotonic()
+    _ = arr[indices]
+    elapsed = time.monotonic() - start
+    return accesses / elapsed / 1e6
+
+
+def bench_mem_copy(size_mb: int = 256) -> float:
+    """numpy.copy. Returns GB/s."""
+    if not HAS_NUMPY:
+        raise ImportError("numpy is required for bench_mem_copy")
+    n_elements = (size_mb * 1024 * 1024) // 8
+    arr = np.ones(n_elements, dtype=np.float64)
+    start = time.monotonic()
+    _ = np.copy(arr)
+    elapsed = time.monotonic() - start
+    bytes_copied = n_elements * 8 * 2  # read + write
+    return bytes_copied / elapsed / 1e9
