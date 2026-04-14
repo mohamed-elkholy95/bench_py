@@ -1049,12 +1049,12 @@ BENCHMARKS: List[Tuple[str, str, Callable, int, str]] = [
     ("mandelbrot",        "cpu_single", bench_mandelbrot,        1024,        "pixels/sec"),
     ("matrix_1t",         "cpu_single", bench_matrix_single,     1024,        "GFLOPS"),
     ("compression",       "cpu_single", bench_compression,       10,          "MB/s"),
-    ("sort",              "cpu_single", bench_sort,              10_000_000,  "M_elements/sec"),
+    ("sort",              "cpu_single", bench_sort,              10_000_000,  "Melem/s"),
     # CPU Multi-Core
     ("matrix_full",       "cpu_multi",  bench_matrix_multi,      4096,        "GFLOPS"),
     ("parallel_compute",  "cpu_multi",  bench_parallel_compute,  1024,        "pixels/sec"),
     ("hash_throughput",   "cpu_multi",  bench_hash_throughput,   100,         "MB/s"),
-    ("parallel_sort",     "cpu_multi",  bench_parallel_sort,     10_000_000,  "M_elements/sec"),
+    ("parallel_sort",     "cpu_multi",  bench_parallel_sort,     10_000_000,  "Melem/s"),
     # GPU
     ("gpu_matrix",        "gpu",        bench_gpu_matrix,        4096,        "GFLOPS"),
     ("gpu_elementwise",   "gpu",        bench_gpu_elementwise,   32_000_000,  "GB/s"),
@@ -1570,16 +1570,19 @@ class _Color:
 
 
 def _format_raw(value: float, unit: str) -> str:
-    """Format a raw value with SI prefix for compact display."""
+    """Format a raw value with SI prefix, padded to fixed width for alignment."""
     if value >= 1_000_000:
-        return f"{value / 1_000_000:.1f}M {unit}"
-    if value >= 1_000:
-        return f"{value / 1_000:.1f}K {unit}"
-    if value >= 100:
-        return f"{value:.0f} {unit}"
-    if value >= 10:
-        return f"{value:.1f} {unit}"
-    return f"{value:.2f} {unit}"
+        num = f"{value / 1_000_000:.1f}M"
+    elif value >= 1_000:
+        num = f"{value / 1_000:.1f}K"
+    elif value >= 100:
+        num = f"{value:.0f}"
+    elif value >= 10:
+        num = f"{value:.1f}"
+    else:
+        num = f"{value:.2f}"
+    raw = f"{num} {unit}"
+    return f"{raw:<18}"
 
 
 def _format_score(score: float) -> str:
@@ -1589,9 +1592,15 @@ def _format_score(score: float) -> str:
     return f"{score:.1f}"
 
 
-def _score_color(c: _Color, score: float) -> str:
+def _score_color(c: _Color, score: float, show_dev: bool = False) -> str:
     """Color a score based on its value (10.0 = baseline)."""
     text = _format_score(score)
+    if show_dev:
+        pct = round((score - 10.0) / 10.0 * 100)
+        if pct >= 0:
+            text += f" (+{pct}%)"
+        else:
+            text += f" ({pct}%)"
     if score >= 10.0:
         return c.green(text)
     if score >= 8.0:
@@ -1656,6 +1665,40 @@ def _fmt_test(c: _Color, test: Optional[BenchmarkResult], label: str, w: int = 1
     return f"  {label:<{w}} {score_str:>6}  {c.dim(raw_str)}"
 
 
+def _render_cell(c: _Color, label: str, test: Optional[BenchmarkResult]) -> str:
+    """Render a single test cell: 'Label  score(dev%)  raw'."""
+    if test is None:
+        return f"{label:<10} {'--':>4}"
+    score_str = _score_color(c, test.score, show_dev=True)
+    return f"{label:<10} {score_str}"
+
+
+def _render_row(
+    c: _Color,
+    l_tests: List[BenchmarkResult],
+    r_tests: List[BenchmarkResult],
+    l_label: Optional[str], l_name: Optional[str],
+    r_label: Optional[str], r_name: Optional[str],
+) -> str:
+    """Render a two-column test result row."""
+    l_test = _test_by_name(l_tests, l_name) if l_name else None
+    r_test = _test_by_name(r_tests, r_name) if r_name else None
+
+    if l_label is not None:
+        left = "  " + _render_cell(c, l_label, l_test)
+    else:
+        left = ""
+
+    if r_label is not None and r_test:
+        right = _render_cell(c, r_label, r_test)
+    elif r_label is not None:
+        right = f"{r_label:<10} {'--':>4}"
+    else:
+        right = ""
+
+    return f"{_pad(left, 32)}{right}"
+
+
 def _card_header(c: _Color, hw_name: str, score: float, W: int) -> List[str]:
     """Render a category card header with hardware name and score."""
     score_str = _score_color(c, score)
@@ -1702,7 +1745,7 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
     lines.append(sep_heavy * W)
     overall_str = _score_color(c, report.overall_score)
     lines.append(c.bold(f"  BENCHMARK SCORE   {overall_str}") + c.dim(" /10"))
-    ts_short = report.timestamp[:10] if report.timestamp else ""
+    ts_short = report.timestamp[:19].replace("T", " ") if report.timestamp else ""
     lines.append(c.dim(f"  {ts_short}"))
     lines.append(sep_heavy * W)
 
@@ -1744,25 +1787,11 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
             ("Sort", "sort", None, None),
         ]
         for l_label, l_name, r_label, r_name in rows:
-            l_test = _test_by_name(sc, l_name) if l_name else None
-            r_test = _test_by_name(mc, r_name) if r_name else None
-            l_score = _score_color(c, l_test.score) if l_test else "     "
-            l_raw = c.dim(_format_raw(l_test.raw_value, l_test.unit)) if l_test else ""
-            left = f"  {l_label:<10} {l_score:>6} {l_raw}"
-
-            if r_label and r_test:
-                r_score = _score_color(c, r_test.score)
-                r_raw = c.dim(_format_raw(r_test.raw_value, r_test.unit))
-                right = f"{r_label:<10} {r_score:>6} {r_raw}"
-            elif r_label:
-                right = ""
-            else:
-                right = ""
-            lines.append(f"{_pad(left, 38)}{right}")
+            lines.append(_render_row(c, sc, mc, l_label, l_name, r_label, r_name))
 
         lines.append("")
         assess = _assess_performance(cpu_score)
-        lines.append(c.dim(f"  > CPU is {assess}"))
+        lines.append(c.dim(f"  > CPU is {assess} ({_format_score(cpu_score)})"))
     elif cpu_s and cpu_s.skipped:
         lines.append(c.dim(f"\n  CPU: skipped"))
 
@@ -1779,30 +1808,16 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
         lines.append(f"  {'Compute Results':<28} {'Transfer Results'}")
         gt = gpu_cat.tests
         rows = [
-            ("Matrix", "gpu_matrix", "Element-wise", "gpu_elementwise"),
+            ("Matrix", "gpu_matrix", "Elem-wise", "gpu_elementwise"),
             ("Batch", "gpu_batch_matmul", "Reduction", "gpu_reduction"),
-            (None, None, "Host-Dev", "gpu_transfer"),
+            (None, None, "H2D Xfer", "gpu_transfer"),
         ]
         for l_label, l_name, r_label, r_name in rows:
-            l_test = _test_by_name(gt, l_name) if l_name else None
-            r_test = _test_by_name(gt, r_name) if r_name else None
-            if l_label and l_test:
-                l_score = _score_color(c, l_test.score)
-                l_raw = c.dim(_format_raw(l_test.raw_value, l_test.unit))
-                left = f"  {l_label:<10} {l_score:>6} {l_raw}"
-            else:
-                left = f"  {'':10} {'':>6} " if l_label is None else f"  {l_label:<10} {'--':>6}"
-            if r_label and r_test:
-                r_score = _score_color(c, r_test.score)
-                r_raw = c.dim(_format_raw(r_test.raw_value, r_test.unit))
-                right = f"{r_label:<12} {r_score:>6} {r_raw}"
-            else:
-                right = ""
-            lines.append(f"{_pad(left, 38)}{right}")
+            lines.append(_render_row(c, gt, gt, l_label, l_name, r_label, r_name))
 
         lines.append("")
         assess = _assess_performance(gpu_cat.score)
-        lines.append(c.dim(f"  > GPU is {assess}"))
+        lines.append(c.dim(f"  > GPU is {assess} ({_format_score(gpu_cat.score)})"))
     elif gpu_cat and gpu_cat.skipped:
         lines.append(c.dim(f"\n  GPU: skipped (MLX not available)"))
 
@@ -1823,36 +1838,25 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
             (None, None, "Latency", "mem_latency"),
         ]
         for l_label, l_name, r_label, r_name in rows:
-            l_test = _test_by_name(mt, l_name) if l_name else None
-            r_test = _test_by_name(mt, r_name) if r_name else None
-            if l_label and l_test:
-                l_score = _score_color(c, l_test.score)
-                l_raw = c.dim(_format_raw(l_test.raw_value, l_test.unit))
-                left = f"  {l_label:<10} {l_score:>6} {l_raw}"
-            else:
-                left = f"  {'':10} {'':>6} " if l_label is None else f"  {l_label:<10} {'--':>6}"
-            if r_label and r_test:
-                r_score = _score_color(c, r_test.score)
-                r_raw = c.dim(_format_raw(r_test.raw_value, r_test.unit))
-                right = f"{r_label:<10} {r_score:>6} {r_raw}"
-            else:
-                right = ""
-            lines.append(f"{_pad(left, 38)}{right}")
+            lines.append(_render_row(c, mt, mt, l_label, l_name, r_label, r_name))
 
         lines.append("")
         assess = _assess_performance(mem_cat.score)
-        lines.append(c.dim(f"  > Memory is {assess}"))
+        lines.append(c.dim(f"  > Memory is {assess} ({_format_score(mem_cat.score)})"))
     elif mem_cat and mem_cat.skipped:
         lines.append(c.dim(f"\n  Memory: skipped"))
 
     # === STORAGE CARD ===
     stor_cat = cats.get("storage")
     if stor_cat and not stor_cat.skipped:
-        stor_label = storage_dev
+        stor_parts = []
         if storage_total:
-            stor_label += f" {storage_total} GB"
+            stor_parts.append(f"{storage_total} GB")
         if storage_type:
-            stor_label += f" {storage_type}"
+            stor_parts.append(storage_type)
+        if storage_dev:
+            stor_parts.append(f"({storage_dev})")
+        stor_label = " ".join(stor_parts) if stor_parts else "Unknown"
         lines.extend(_card_header(c, f"Storage: {stor_label}", stor_cat.score, W))
         lines.append("")
 
@@ -1863,19 +1867,11 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
             ("Random", "disk_random_write", "Random", "disk_random_read"),
         ]
         for l_label, l_name, r_label, r_name in rows:
-            l_test = _test_by_name(st, l_name)
-            r_test = _test_by_name(st, r_name)
-            l_score = _score_color(c, l_test.score) if l_test else "     "
-            l_raw = c.dim(_format_raw(l_test.raw_value, l_test.unit)) if l_test else ""
-            r_score = _score_color(c, r_test.score) if r_test else "     "
-            r_raw = c.dim(_format_raw(r_test.raw_value, r_test.unit)) if r_test else ""
-            left = f"  {l_label:<10} {l_score:>6} {l_raw}"
-            right = f"{r_label:<10} {r_score:>6} {r_raw}"
-            lines.append(f"{_pad(left, 38)}{right}")
+            lines.append(_render_row(c, st, st, l_label, l_name, r_label, r_name))
 
         lines.append("")
         assess = _assess_performance(stor_cat.score)
-        lines.append(c.dim(f"  > Storage is {assess}"))
+        lines.append(c.dim(f"  > Storage is {assess} ({_format_score(stor_cat.score)})"))
     elif stor_cat and stor_cat.skipped:
         lines.append(c.dim(f"\n  Storage: skipped"))
 
