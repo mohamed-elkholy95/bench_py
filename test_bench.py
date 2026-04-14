@@ -289,3 +289,41 @@ def test_executor_handles_timeout():
     executor = TestExecutor()
     with pytest.raises(TestTimeout):
         executor.run_single(_dummy_bench_slow, (100,), timeout=2)
+
+
+# ---------------------------------------------------------------------------
+# Task 5: SystemProbe, CooldownManager, ResourceGuard
+# ---------------------------------------------------------------------------
+
+def test_system_probe_returns_readiness():
+    from bench import SystemProbe, SystemReadiness
+    probe = SystemProbe()
+    readiness = probe.check()
+    assert isinstance(readiness, SystemReadiness)
+    assert isinstance(readiness.ready, bool)
+    assert readiness.available_ram_gb > 0
+
+
+def test_cooldown_policy_defaults():
+    from bench import CooldownPolicy
+    p = CooldownPolicy()
+    assert p.min_seconds == 3.0
+    assert p.max_seconds == 30.0
+
+
+def test_cooldown_manager_respects_no_cooldown():
+    from bench import CooldownManager, CooldownPolicy
+    mgr = CooldownManager()
+    policy = CooldownPolicy(min_seconds=0, max_seconds=0)
+    result = mgr.wait(policy)
+    assert result["waited_seconds"] >= 0
+
+
+def test_resource_guard_start_stop():
+    from bench import ResourceGuard
+    guard = ResourceGuard()
+    guard.start()
+    time.sleep(0.6)
+    summary = guard.stop()
+    assert isinstance(summary, dict)
+    assert "peak_cpu_pct" in summary or summary == {}

@@ -359,3 +359,204 @@ class TestExecutor:
             if self._active_process.is_alive():
                 self._active_process.kill()
                 self._active_process.join()
+
+
+# ---------------------------------------------------------------------------
+# Task 5: SystemProbe, CooldownManager, ResourceGuard
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SystemReadiness:
+    cpu_idle_pct: float = 0.0
+    available_ram_gb: float = 0.0
+    disk_free_gb: float = 0.0
+    thermal_state: str = "unknown"
+    battery_plugged: bool = True
+    background_load: List[str] = field(default_factory=list)
+    ready: bool = True
+    warnings: List[str] = field(default_factory=list)
+    blockers: List[str] = field(default_factory=list)
+
+
+class SystemProbe:
+    """Pre-flight system readiness checks."""
+
+    def check(self) -> SystemReadiness:
+        sr = SystemReadiness()
+
+        # RAM check
+        if HAS_PSUTIL:
+            vm = psutil.virtual_memory()
+            sr.available_ram_gb = vm.available / (1024 ** 3)
+            if sr.available_ram_gb < 0.5:
+                sr.blockers.append(f"Low RAM: {sr.available_ram_gb:.1f} GB available")
+        else:
+            sr.available_ram_gb = 999.0
+
+        # CPU idle check
+        if HAS_PSUTIL:
+            cpu_pct = psutil.cpu_percent(interval=1)
+            sr.cpu_idle_pct = 100.0 - cpu_pct
+            if cpu_pct > 90:
+                sr.warnings.append(f"High CPU usage: {cpu_pct:.0f}%")
+        else:
+            sr.cpu_idle_pct = 100.0
+
+        # Disk free (use cwd)
+        try:
+            stat = os.statvfs(os.getcwd())
+            sr.disk_free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            if sr.disk_free_gb < 1.0:
+                sr.warnings.append(f"Low disk space: {sr.disk_free_gb:.1f} GB free")
+        except (AttributeError, OSError):
+            sr.disk_free_gb = 999.0
+
+        # Thermal state (macOS only)
+        if platform.system() == "Darwin":
+            try:
+                result = subprocess.run(
+                    ["pmset", "-g", "therm"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                output = result.stdout
+                if "CPU_Speed_Limit" in output:
+                    for line in output.splitlines():
+                        if "CPU_Speed_Limit" in line:
+                            parts = line.split("=")
+                            if len(parts) == 2:
+                                try:
+                                    limit = int(parts[1].strip())
+                                    if limit < 100:
+                                        sr.thermal_state = "throttled"
+                                        sr.warnings.append(
+                                            f"CPU throttled to {limit}%"
+                                        )
+                                    else:
+                                        sr.thermal_state = "nominal"
+                                except ValueError:
+                                    sr.thermal_state = "nominal"
+                else:
+                    sr.thermal_state = "nominal"
+            except (OSError, subprocess.TimeoutExpired):
+                sr.thermal_state = "unknown"
+        else:
+            sr.thermal_state = "nominal"
+
+        # Battery check
+        if HAS_PSUTIL:
+            try:
+                battery = psutil.sensors_battery()
+                if battery is not None:
+                    sr.battery_plugged = battery.power_plugged
+                    if not battery.power_plugged and battery.percent < 20:
+                        sr.warnings.append(
+                            f"Battery low: {battery.percent:.0f}% and unplugged"
+                        )
+            except (AttributeError, OSError):
+                pass
+
+        sr.ready = len(sr.blockers) == 0
+        return sr
+
+
+@dataclass
+class CooldownPolicy:
+    min_seconds: float = 3.0
+    max_seconds: float = 30.0
+    target_cpu_pct: float = 10.0
+    target_temp_c: float = 70.0
+    poll_interval: float = 1.0
+
+
+class CooldownManager:
+    """Wait between benchmarks until CPU cools."""
+
+    def wait(self, policy: CooldownPolicy) -> Dict[str, Any]:
+        gc.collect()
+        start = time.monotonic()
+
+        if policy.max_seconds <= 0:
+            return {"waited_seconds": 0.0}
+
+        # Always wait at least min_seconds
+        min_end = start + policy.min_seconds
+        max_end = start + policy.max_seconds
+
+        while True:
+            now = time.monotonic()
+            elapsed = now - start
+
+            if now >= max_end:
+                break
+
+            # Check if we can stop early (past min and CPU is cool)
+            if now >= min_end:
+                if HAS_PSUTIL:
+                    cpu_pct = psutil.cpu_percent(interval=None)
+                    if cpu_pct <= policy.target_cpu_pct:
+                        break
+                else:
+                    break
+
+            time.sleep(min(policy.poll_interval, max_end - now))
+
+        waited = time.monotonic() - start
+        return {"waited_seconds": waited}
+
+
+class ResourceGuard:
+    """Daemon thread that samples CPU/RAM at 500ms intervals."""
+
+    def __init__(self) -> None:
+        self._thread: Optional[threading.Thread] = None
+        self._running = False
+        self._cpu_samples: List[float] = []
+        self._ram_samples: List[float] = []
+
+    def start(self) -> None:
+        if not HAS_PSUTIL:
+            return
+        self._running = True
+        self._cpu_samples = []
+        self._ram_samples = []
+        self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+        self._thread.start()
+
+    def _sample_loop(self) -> None:
+        while self._running:
+            try:
+                self._cpu_samples.append(psutil.cpu_percent(interval=None))
+                vm = psutil.virtual_memory()
+                self._ram_samples.append(vm.used / (1024 ** 2))
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+    def stop(self) -> Dict[str, Any]:
+        if not HAS_PSUTIL:
+            return {}
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+            self._thread = None
+        if not self._cpu_samples:
+            return {"peak_cpu_pct": 0.0, "peak_ram_mb": 0.0, "avg_cpu_pct": 0.0}
+        return {
+            "peak_cpu_pct": max(self._cpu_samples),
+            "avg_cpu_pct": sum(self._cpu_samples) / len(self._cpu_samples),
+            "peak_ram_mb": max(self._ram_samples) if self._ram_samples else 0.0,
+        }
+
+    def check_critical(self) -> Optional[str]:
+        if not HAS_PSUTIL:
+            return None
+        try:
+            vm = psutil.virtual_memory()
+            available_mb = vm.available / (1024 ** 2)
+            if available_mb < 512:
+                return f"Critical: only {available_mb:.0f} MB RAM available"
+        except Exception:
+            pass
+        return None
