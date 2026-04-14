@@ -560,3 +560,90 @@ class ResourceGuard:
         except Exception:
             pass
         return None
+
+
+# ---------------------------------------------------------------------------
+# Task 6: CPU Single-Core Benchmarks
+# ---------------------------------------------------------------------------
+
+def bench_prime_sieve(n: int = 1_000_000) -> float:
+    """Sieve of Eratosthenes. Returns ops/sec."""
+    start = time.monotonic()
+    sieve = bytearray([1]) * (n + 1)
+    sieve[0] = 0
+    sieve[1] = 0
+    for i in range(2, int(n ** 0.5) + 1):
+        if sieve[i]:
+            sieve[i * i::i] = bytearray(len(sieve[i * i::i]))
+    elapsed = time.monotonic() - start
+    return 1.0 / elapsed
+
+
+def bench_mandelbrot(grid_size: int = 1024) -> float:
+    """Mandelbrot set. Returns pixels/sec."""
+    max_iter = 100
+    xmin, xmax = -2.5, 1.0
+    ymin, ymax = -1.25, 1.25
+    pixels = 0
+    start = time.monotonic()
+    for py in range(grid_size):
+        cy = ymin + (ymax - ymin) * py / grid_size
+        for px in range(grid_size):
+            cx = xmin + (xmax - xmin) * px / grid_size
+            zr = 0.0
+            zi = 0.0
+            for _ in range(max_iter):
+                zr2 = zr * zr
+                zi2 = zi * zi
+                if zr2 + zi2 > 4.0:
+                    break
+                zi = 2.0 * zr * zi + cy
+                zr = zr2 - zi2 + cx
+            pixels += 1
+    elapsed = time.monotonic() - start
+    return pixels / elapsed
+
+
+def bench_matrix_single(size: int = 1024) -> float:
+    """NumPy matmul single-thread. Returns GFLOPS."""
+    if not HAS_NUMPY:
+        raise ImportError("numpy is required for bench_matrix_single")
+    env_vars = ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"]
+    saved = {v: os.environ.get(v) for v in env_vars}
+    try:
+        for v in env_vars:
+            os.environ[v] = "1"
+        a = np.random.rand(size, size).astype(np.float64)
+        b = np.random.rand(size, size).astype(np.float64)
+        start = time.monotonic()
+        _ = np.dot(a, b)
+        elapsed = time.monotonic() - start
+    finally:
+        for v in env_vars:
+            orig = saved[v]
+            if orig is None:
+                os.environ.pop(v, None)
+            else:
+                os.environ[v] = orig
+    flops = 2.0 * size ** 3
+    return flops / elapsed / 1e9
+
+
+def bench_compression(size_mb: int = 10) -> float:
+    """zlib compress+decompress. Returns MB/s."""
+    data = os.urandom(size_mb * 1024 * 1024)
+    start = time.monotonic()
+    compressed = zlib.compress(data, level=6)
+    zlib.decompress(compressed)
+    elapsed = time.monotonic() - start
+    return (size_mb * 2) / elapsed  # compress + decompress counts both passes
+
+
+def bench_sort(n: int = 10_000_000) -> float:
+    """Sort random ints. Returns M_elements/sec."""
+    import random
+    data = [random.randint(0, n) for _ in range(n)]
+    start = time.monotonic()
+    sorted(data)
+    elapsed = time.monotonic() - start
+    return n / elapsed / 1e6

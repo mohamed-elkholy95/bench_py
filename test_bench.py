@@ -327,3 +327,32 @@ def test_resource_guard_start_stop():
     summary = guard.stop()
     assert isinstance(summary, dict)
     assert "peak_cpu_pct" in summary or summary == {}
+
+
+# ---------------------------------------------------------------------------
+# Task 6: CPU single-core benchmarks
+# ---------------------------------------------------------------------------
+
+def test_bench_prime_sieve():
+    from bench import bench_prime_sieve
+    assert bench_prime_sieve(100_000) > 0
+
+
+def test_bench_mandelbrot():
+    from bench import bench_mandelbrot
+    assert bench_mandelbrot(128) > 0
+
+
+def test_bench_matrix_single():
+    from bench import bench_matrix_single
+    assert bench_matrix_single(256) > 0
+
+
+def test_bench_compression():
+    from bench import bench_compression
+    assert bench_compression(1) > 0
+
+
+def test_bench_sort():
+    from bench import bench_sort
+    assert bench_sort(100_000) > 0
