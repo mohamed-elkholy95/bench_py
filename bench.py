@@ -1346,7 +1346,7 @@ class BenchmarkOrchestrator:
         if name == "disk_seq_write":
             return (config.output_dir, size)
         if name == "disk_seq_read":
-            # Write a temp file first, then pass the path
+            # Write a temp file, flush, purge cache, then pass path
             path = os.path.join(config.output_dir, f"_bench_seqread_{os.getpid()}.tmp")
             write_mb = size if size > 0 else 8
             chunk = os.urandom(1024 * 1024)
@@ -1355,6 +1355,13 @@ class BenchmarkOrchestrator:
                     f.write(chunk)
                 f.flush()
                 os.fsync(f.fileno())
+                _disable_file_cache(f.fileno())
+            # Try to purge OS disk cache for this file
+            if platform.system() == "Darwin":
+                try:
+                    subprocess.run(["purge"], capture_output=True, timeout=5)
+                except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                    pass
             self._temp_files.append(path)
             return (path,)
         if name == "disk_random_write":
@@ -1656,47 +1663,28 @@ def _test_by_name(cat_tests: List[BenchmarkResult], name: str) -> Optional[Bench
     return None
 
 
-def _fmt_test(c: _Color, test: Optional[BenchmarkResult], label: str, w: int = 14) -> str:
-    """Format a single test as 'Label   score  raw_value'."""
-    if test is None:
-        return f"  {label:<{w}} {c.dim('--'):>6}  {c.dim('--')}"
-    score_str = _score_color(c, test.score)
-    raw_str = _format_raw(test.raw_value, test.unit)
-    return f"  {label:<{w}} {score_str:>6}  {c.dim(raw_str)}"
 
-
-def _render_cell(c: _Color, label: str, test: Optional[BenchmarkResult]) -> str:
-    """Render a single test cell: 'Label  score(dev%)  raw'."""
+def _render_test_line(c: _Color, label: str, test: Optional[BenchmarkResult]) -> str:
+    """Render a single test as a full-width line: '  Label   score(dev%)   raw_value'."""
     if test is None:
-        return f"{label:<10} {'--':>4}"
+        return f"    {label:<14} {'--':>12}"
     score_str = _score_color(c, test.score, show_dev=True)
-    return f"{label:<10} {score_str}"
+    raw_str = c.dim(_format_raw(test.raw_value, test.unit))
+    return f"    {label:<14} {_pad(score_str, 16)}{raw_str}"
 
 
-def _render_row(
+def _render_section(
     c: _Color,
-    l_tests: List[BenchmarkResult],
-    r_tests: List[BenchmarkResult],
-    l_label: Optional[str], l_name: Optional[str],
-    r_label: Optional[str], r_name: Optional[str],
-) -> str:
-    """Render a two-column test result row."""
-    l_test = _test_by_name(l_tests, l_name) if l_name else None
-    r_test = _test_by_name(r_tests, r_name) if r_name else None
-
-    if l_label is not None:
-        left = "  " + _render_cell(c, l_label, l_test)
-    else:
-        left = ""
-
-    if r_label is not None and r_test:
-        right = _render_cell(c, r_label, r_test)
-    elif r_label is not None:
-        right = f"{r_label:<10} {'--':>4}"
-    else:
-        right = ""
-
-    return f"{_pad(left, 32)}{right}"
+    title: str,
+    tests: List[BenchmarkResult],
+    rows: List[Tuple[str, str]],
+) -> List[str]:
+    """Render a labeled section of test results."""
+    lines = [f"  {c.dim(title)}"]
+    for label, name in rows:
+        test = _test_by_name(tests, name)
+        lines.append(_render_test_line(c, label, test))
+    return lines
 
 
 def _card_header(c: _Color, hw_name: str, score: float, W: int) -> List[str]:
@@ -1743,10 +1731,10 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
 
     # === HEADER ===
     lines.append(sep_heavy * W)
-    overall_str = _score_color(c, report.overall_score)
-    lines.append(c.bold(f"  BENCHMARK SCORE   {overall_str}") + c.dim(" /10"))
+    overall_str = _score_color(c, report.overall_score, show_dev=True)
+    lines.append(c.bold(f"  PyBench Score   {overall_str}"))
     ts_short = report.timestamp[:19].replace("T", " ") if report.timestamp else ""
-    lines.append(c.dim(f"  {ts_short}"))
+    lines.append(c.dim(f"  {ts_short}") + c.dim(f"  baseline: 10"))
     lines.append(sep_heavy * W)
 
     # === SCORE BADGES ===
@@ -1774,20 +1762,19 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
         lines.append(c.dim(f"  {cores_p} cores / {cores_l} threads, {arch}"))
         lines.append("")
 
-        # Two-column: Single-Core | Multi-Core
-        lines.append(f"  {'Single-Core Results':<28} {'Multi-Core Results'}")
         sc = cpu_s.tests if cpu_s else []
         mc = cpu_m.tests if (cpu_m and not cpu_m.skipped) else []
 
-        rows = [
-            ("Integer", "prime_sieve", "Matrix", "matrix_full"),
-            ("Float", "mandelbrot", "Parallel", "parallel_compute"),
-            ("Matrix", "matrix_1t", "Crypto", "hash_throughput"),
-            ("Compress", "compression", "Sort", "parallel_sort"),
-            ("Sort", "sort", None, None),
-        ]
-        for l_label, l_name, r_label, r_name in rows:
-            lines.append(_render_row(c, sc, mc, l_label, l_name, r_label, r_name))
+        lines.extend(_render_section(c, "Single-Core", sc, [
+            ("Integer", "prime_sieve"), ("Float", "mandelbrot"),
+            ("Matrix", "matrix_1t"), ("Compress", "compression"),
+            ("Sort", "sort"),
+        ]))
+        if mc:
+            lines.extend(_render_section(c, "Multi-Core", mc, [
+                ("Matrix", "matrix_full"), ("Parallel", "parallel_compute"),
+                ("Crypto", "hash_throughput"), ("Sort", "parallel_sort"),
+            ]))
 
         lines.append("")
         assess = _assess_performance(cpu_score)
@@ -1805,15 +1792,14 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
             lines.append(c.dim(f"  {vram_str}{unified_str} Memory"))
         lines.append("")
 
-        lines.append(f"  {'Compute Results':<28} {'Transfer Results'}")
         gt = gpu_cat.tests
-        rows = [
-            ("Matrix", "gpu_matrix", "Elem-wise", "gpu_elementwise"),
-            ("Batch", "gpu_batch_matmul", "Reduction", "gpu_reduction"),
-            (None, None, "H2D Xfer", "gpu_transfer"),
-        ]
-        for l_label, l_name, r_label, r_name in rows:
-            lines.append(_render_row(c, gt, gt, l_label, l_name, r_label, r_name))
+        lines.extend(_render_section(c, "Compute", gt, [
+            ("Matrix", "gpu_matrix"), ("Batch", "gpu_batch_matmul"),
+        ]))
+        lines.extend(_render_section(c, "Transfer", gt, [
+            ("Elem-wise", "gpu_elementwise"), ("Reduction", "gpu_reduction"),
+            ("H2D Xfer", "gpu_transfer"),
+        ]))
 
         lines.append("")
         assess = _assess_performance(gpu_cat.score)
@@ -1830,15 +1816,14 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
         lines.extend(_card_header(c, mem_label, mem_cat.score, W))
         lines.append("")
 
-        lines.append(f"  {'Bandwidth Results':<28} {'Access Results'}")
         mt = mem_cat.tests
-        rows = [
-            ("Read", "mem_seq_read", "Random", "mem_random_access"),
-            ("Write", "mem_seq_write", "Copy", "mem_copy"),
-            (None, None, "Latency", "mem_latency"),
-        ]
-        for l_label, l_name, r_label, r_name in rows:
-            lines.append(_render_row(c, mt, mt, l_label, l_name, r_label, r_name))
+        lines.extend(_render_section(c, "Bandwidth", mt, [
+            ("Read", "mem_seq_read"), ("Write", "mem_seq_write"),
+            ("Copy", "mem_copy"),
+        ]))
+        lines.extend(_render_section(c, "Access", mt, [
+            ("Random", "mem_random_access"), ("Latency", "mem_latency"),
+        ]))
 
         lines.append("")
         assess = _assess_performance(mem_cat.score)
@@ -1860,14 +1845,13 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
         lines.extend(_card_header(c, f"Storage: {stor_label}", stor_cat.score, W))
         lines.append("")
 
-        lines.append(f"  {'Write Results':<28} {'Read Results'}")
         st = stor_cat.tests
-        rows = [
-            ("Sequential", "disk_seq_write", "Sequential", "disk_seq_read"),
-            ("Random", "disk_random_write", "Random", "disk_random_read"),
-        ]
-        for l_label, l_name, r_label, r_name in rows:
-            lines.append(_render_row(c, st, st, l_label, l_name, r_label, r_name))
+        lines.extend(_render_section(c, "Write", st, [
+            ("Sequential", "disk_seq_write"), ("Random", "disk_random_write"),
+        ]))
+        lines.extend(_render_section(c, "Read", st, [
+            ("Sequential", "disk_seq_read"), ("Random", "disk_random_read"),
+        ]))
 
         lines.append("")
         assess = _assess_performance(stor_cat.score)
