@@ -199,6 +199,7 @@ class BenchConfig:
     verbose: bool = False
     output_dir: str = "."
     system_report_path: str = "./system_report.json"
+    auto_iterations: bool = True  # auto-detect iteration count per test
 
 
 # ---------------------------------------------------------------------------
@@ -1202,6 +1203,29 @@ def _suggest_bench_fix(name: str, exc: Exception) -> str:
 _INVERTED_METRICS = {"mem_latency"}
 
 
+def estimate_repetitions(
+    fn: Callable, args: tuple, target_time: float = 5.0, min_reps: int = 3, max_reps: int = 100,
+) -> int:
+    """Estimate how many iterations to run for statistically meaningful results.
+
+    Runs the function once, measures elapsed time, then calculates how many
+    repetitions are needed to fill target_time seconds of measurement.
+    Inspired by pyhpc-benchmarks auto-detection.
+    """
+    try:
+        t0 = time.monotonic()
+        fn(*args)
+        elapsed = time.monotonic() - t0
+    except Exception:
+        return min_reps
+
+    if elapsed <= 0:
+        return max_reps
+
+    reps = int(target_time / elapsed)
+    return max(min_reps, min(max_reps, reps))
+
+
 def safe_benchmark(
     name: str,
     category: str,
@@ -1222,6 +1246,13 @@ def safe_benchmark(
         except Exception:
             pass  # Warmup failures are silently ignored
 
+    # Auto-detect iteration count if using defaults (not explicitly set by user)
+    if config.auto_iterations:
+        iterations = estimate_repetitions(fn, args)
+        log.debug("Auto-estimated %d iterations for %s", iterations, name)
+    else:
+        iterations = config.iterations
+
     last_exc: Optional[Exception] = None
 
     while True:
@@ -1230,7 +1261,7 @@ def safe_benchmark(
         iteration_error: Optional[Exception] = None
 
         try:
-            for _ in range(config.iterations):
+            for _ in range(iterations):
                 t0 = time.monotonic()
                 raw = fn(*args)
                 elapsed = time.monotonic() - t0
@@ -1387,13 +1418,15 @@ class BenchmarkOrchestrator:
         return (size,)
 
     def _run_category(self, category: str) -> None:
-        """Run all benchmarks in a category."""
+        """Run all benchmarks in a category (randomized order to reduce bias)."""
+        import random as _rand
         config = self._config
         self._results.setdefault(category, [])
 
-        for name, cat, fn, default_size, unit in BENCHMARKS:
-            if cat != category:
-                continue
+        cat_benchmarks = [(n, c, f, d, u) for n, c, f, d, u in BENCHMARKS if c == category]
+        _rand.shuffle(cat_benchmarks)
+
+        for name, cat, fn, default_size, unit in cat_benchmarks:
             if self._shutdown:
                 break
 
@@ -2039,9 +2072,11 @@ def main() -> None:
         log.warning("system_report.json not found at %s — running without system info.", report_path)
 
     # Build config
+    # auto_iterations: True unless user explicitly sets --iterations
+    user_set_iterations = "--iterations" in sys.argv or "-i" in sys.argv
     config = BenchConfig(
-        iterations=args.iterations,
-        warmups=args.warmups,
+        iterations=3 if args.quick else args.iterations,
+        warmups=1 if args.quick else args.warmups,
         test_timeout=args.test_timeout,
         timeout=args.timeout,
         skip_categories=args.skip,
@@ -2053,6 +2088,7 @@ def main() -> None:
         no_color=args.no_color,
         verbose=args.verbose,
         output_dir=args.output_dir,
+        auto_iterations=not user_set_iterations and not args.quick,
     )
 
     # Install signal handlers

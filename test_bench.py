@@ -489,6 +489,35 @@ def test_bench_disk_random_read():
 
 
 # ---------------------------------------------------------------------------
+# Auto repetition estimation
+# ---------------------------------------------------------------------------
+
+def test_estimate_repetitions_fast_function():
+    from bench import estimate_repetitions
+    def _fast(n: int) -> float:
+        return 1.0
+    reps = estimate_repetitions(_fast, (1,), target_time=1.0)
+    assert reps >= 3  # min_reps
+
+
+def test_estimate_repetitions_slow_function():
+    from bench import estimate_repetitions
+    def _slow(n: int) -> float:
+        time.sleep(0.5)
+        return 1.0
+    reps = estimate_repetitions(_slow, (1,), target_time=2.0)
+    assert reps <= 10  # shouldn't be too many for a 0.5s function
+
+
+def test_estimate_repetitions_crashing_function():
+    from bench import estimate_repetitions
+    def _crash(n: int) -> float:
+        raise RuntimeError("boom")
+    reps = estimate_repetitions(_crash, (1,))
+    assert reps == 3  # falls back to min_reps
+
+
+# ---------------------------------------------------------------------------
 # Task 11: Registry, Phases, Baseline, safe_benchmark
 # ---------------------------------------------------------------------------
 
