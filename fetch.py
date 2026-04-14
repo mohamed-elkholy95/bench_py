@@ -324,6 +324,44 @@ class CommandRunner:
                 InterruptedError, OSError):
             return None
 
+    @property
+    def is_shutdown(self) -> bool:
+        """Whether a graceful shutdown has been requested."""
+        return self._shutdown
+
+    def run_output(self, command: List[str], timeout: Optional[int] = None) -> Optional[str]:
+        """Execute command and return stdout or stderr output, ignoring exit code.
+
+        Unlike run(), this does not raise on non-zero exits. Useful for tools
+        that write version info to stderr (java -version, ssh -V).
+        Returns None on any failure (missing binary, timeout, shutdown).
+        """
+        if self._shutdown:
+            return None
+        timeout = timeout if timeout is not None else self.default_timeout
+        try:
+            proc = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except (FileNotFoundError, OSError):
+            return None
+
+        self._processes.append(proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            return None
+        finally:
+            if proc in self._processes:
+                self._processes.remove(proc)
+
+        return (stdout.strip() or stderr.strip()) or None
+
     def shutdown(self) -> None:
         """Signal graceful shutdown — terminate all active processes."""
         self._shutdown = True
@@ -338,7 +376,13 @@ class CommandRunner:
 # ---------------------------------------------------------------------------
 
 def _clean_none(d: Any) -> Any:
-    """Recursively remove None values from dicts for clean JSON."""
+    """Recursively remove None values from dicts for clean JSON.
+
+    Note: This strips None-valued keys from *all* dicts, including those
+    nested inside lists. A JSON consumer that expects every object in a
+    list to have identical keys should handle missing fields gracefully.
+    Empty lists are preserved ([] stays as []).
+    """
     if isinstance(d, dict):
         return {k: _clean_none(v) for k, v in d.items() if v is not None}
     if isinstance(d, list):
@@ -818,15 +862,15 @@ def collect_network(run: CommandRunner, os_type: OSType) -> List[NetworkInfo]:
                         iface.speed_mbps = st.speed
 
                 lower = name.lower()
-                if lower.startswith("lo") or lower == "lo0":
+                if lower.startswith("lo"):
                     iface.type = "Loopback"
-                elif "wi" in lower or "wlan" in lower or "airport" in lower:
+                elif lower.startswith(("wlan", "wlp")) or lower == "airport":
                     iface.type = "Wi-Fi"
-                elif "eth" in lower or "en" in lower or "eno" in lower:
+                elif re.match(r"^en\d", lower) or lower.startswith(("eth", "eno", "enp")):
                     iface.type = "Ethernet"
-                elif "bridge" in lower or "br" in lower:
+                elif lower.startswith("bridge") or re.match(r"^br\d", lower):
                     iface.type = "Bridge"
-                elif "docker" in lower or "veth" in lower:
+                elif lower.startswith(("docker", "veth")):
                     iface.type = "Virtual"
 
                 ifaces.append(iface)
@@ -1326,22 +1370,9 @@ def collect_dev_tools(run: CommandRunner, os_type: OSType) -> List[DevTool]:
         if not path:
             continue
         version = None
-        try:
-            proc = subprocess.Popen(
-                version_cmd,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            )
-            try:
-                stdout, stderr = proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-                stdout, stderr = "", ""
-            raw = stdout.strip() or stderr.strip()
-            if raw:
-                version = _parse_version(name, raw)
-        except (FileNotFoundError, OSError):
-            pass
+        raw = run.run_output(version_cmd, timeout=5)
+        if raw:
+            version = _parse_version(name, raw)
         tools.append(DevTool(name=name, version=version, path=path.strip()))
     return tools
 
@@ -1629,7 +1660,7 @@ def format_terminal(report: SystemReport, use_color: bool = True) -> str:
     # Footer
     lines.append("")
     lines.append("=" * W if not use_color else "\u2501" * W)
-    total_collectors = 15  # len(COLLECTORS) — defined later in file
+    total_collectors = len(COLLECTORS)
     n_ok = total_collectors - len(report.errors)
     n_err = len(report.errors)
     lines.append(
@@ -1714,7 +1745,7 @@ def run_collection(runner: CommandRunner, os_type: OSType) -> SystemReport:
     start = time.monotonic()
 
     for name, fn in COLLECTORS:
-        if runner._shutdown:
+        if runner.is_shutdown:
             report.errors.append(CollectionError(
                 collector=name,
                 category="shutdown",
