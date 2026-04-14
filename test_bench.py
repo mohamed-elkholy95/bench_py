@@ -356,3 +356,27 @@ def test_bench_compression():
 def test_bench_sort():
     from bench import bench_sort
     assert bench_sort(100_000) > 0
+
+
+# ---------------------------------------------------------------------------
+# Task 7: CPU multi-core benchmarks
+# ---------------------------------------------------------------------------
+
+def test_bench_matrix_multi():
+    from bench import bench_matrix_multi
+    assert bench_matrix_multi(256) > 0
+
+
+def test_bench_parallel_compute():
+    from bench import bench_parallel_compute
+    assert bench_parallel_compute(128) > 0
+
+
+def test_bench_hash_throughput():
+    from bench import bench_hash_throughput
+    assert bench_hash_throughput(1) > 0
+
+
+def test_bench_parallel_sort():
+    from bench import bench_parallel_sort
+    assert bench_parallel_sort(100_000) > 0

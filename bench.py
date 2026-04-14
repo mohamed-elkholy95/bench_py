@@ -647,3 +647,104 @@ def bench_sort(n: int = 10_000_000) -> float:
     sorted(data)
     elapsed = time.monotonic() - start
     return n / elapsed / 1e6
+
+
+# ---------------------------------------------------------------------------
+# Task 7: CPU Multi-Core Benchmarks
+# ---------------------------------------------------------------------------
+
+def bench_matrix_multi(size: int = 4096) -> float:
+    """NumPy matmul all threads. Returns GFLOPS."""
+    if not HAS_NUMPY:
+        raise ImportError("numpy is required for bench_matrix_multi")
+    a = np.random.rand(size, size).astype(np.float64)
+    b = np.random.rand(size, size).astype(np.float64)
+    start = time.monotonic()
+    _ = np.dot(a, b)
+    elapsed = time.monotonic() - start
+    flops = 2.0 * size ** 3
+    return flops / elapsed / 1e9
+
+
+def _mandelbrot_chunk(args: Tuple[int, int, int, int]) -> int:
+    """Module-level for pickling. Compute mandelbrot for rows y_start..y_end."""
+    grid_size, max_iter, y_start, y_end = args
+    xmin, xmax = -2.5, 1.0
+    ymin, ymax = -1.25, 1.25
+    pixels = 0
+    for py in range(y_start, y_end):
+        cy = ymin + (ymax - ymin) * py / grid_size
+        for px in range(grid_size):
+            cx = xmin + (xmax - xmin) * px / grid_size
+            zr = 0.0
+            zi = 0.0
+            for _ in range(max_iter):
+                zr2 = zr * zr
+                zi2 = zi * zi
+                if zr2 + zi2 > 4.0:
+                    break
+                zi = 2.0 * zr * zi + cy
+                zr = zr2 - zi2 + cx
+            pixels += 1
+    return pixels
+
+
+def bench_parallel_compute(grid_size: int = 1024) -> float:
+    """Parallel mandelbrot. Returns pixels/sec."""
+    max_iter = 100
+    cpu_count = multiprocessing.cpu_count()
+    chunk_size = max(1, grid_size // cpu_count)
+    chunks = []
+    y = 0
+    while y < grid_size:
+        y_end = min(y + chunk_size, grid_size)
+        chunks.append((grid_size, max_iter, y, y_end))
+        y = y_end
+
+    start = time.monotonic()
+    with multiprocessing.Pool(cpu_count) as pool:
+        results = pool.map(_mandelbrot_chunk, chunks)
+    elapsed = time.monotonic() - start
+    total_pixels = sum(results)
+    return total_pixels / elapsed
+
+
+def _hash_chunk(data: bytes) -> bytes:
+    """Module-level for pickling."""
+    return hashlib.sha256(data).digest()
+
+
+def bench_hash_throughput(size_mb: int = 100) -> float:
+    """Parallel SHA-256. Returns MB/s."""
+    cpu_count = multiprocessing.cpu_count()
+    chunk_size = (size_mb * 1024 * 1024) // cpu_count
+    data = os.urandom(chunk_size)
+    chunks = [data] * cpu_count
+
+    start = time.monotonic()
+    with multiprocessing.Pool(cpu_count) as pool:
+        pool.map(_hash_chunk, chunks)
+    elapsed = time.monotonic() - start
+    return size_mb / elapsed
+
+
+def _sort_chunk(data: List[int]) -> List[int]:
+    """Module-level for pickling."""
+    return sorted(data)
+
+
+def bench_parallel_sort(n: int = 10_000_000) -> float:
+    """Parallel sort. Returns M_elements/sec."""
+    import random
+    cpu_count = multiprocessing.cpu_count()
+    chunk_size = n // cpu_count
+    chunks = [
+        [random.randint(0, n) for _ in range(chunk_size)]
+        for _ in range(cpu_count)
+    ]
+
+    start = time.monotonic()
+    with multiprocessing.Pool(cpu_count) as pool:
+        pool.map(_sort_chunk, chunks)
+    elapsed = time.monotonic() - start
+    return n / elapsed / 1e6
