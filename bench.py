@@ -216,3 +216,56 @@ def _clean_none(d: Any) -> Any:
 def report_to_dict(report: BenchmarkReport) -> Dict[str, Any]:
     """Convert a BenchmarkReport to a JSON-friendly dict with None values removed."""
     return _clean_none(asdict(report))
+
+# ---------------------------------------------------------------------------
+# Scoring engine
+# ---------------------------------------------------------------------------
+
+def compute_test_score(raw_value: float, baseline_value: float) -> float:
+    """Normalize a raw measurement against the baseline.
+    Returns a score where 1000 = baseline machine.
+    """
+    if baseline_value <= 0:
+        return 0.0
+    return (raw_value / baseline_value) * 1000.0
+
+
+def geometric_mean(scores: List[float]) -> float:
+    """Geometric mean of scores. Returns 0.0 if empty or any score <= 0."""
+    if not scores or any(s <= 0 for s in scores):
+        return 0.0
+    log_sum = sum(math.log(s) for s in scores)
+    return math.exp(log_sum / len(scores))
+
+
+def compute_median(times: List[float]) -> float:
+    """Median of a list of floats."""
+    s = sorted(times)
+    n = len(s)
+    if n == 0:
+        return 0.0
+    if n % 2 == 1:
+        return s[n // 2]
+    return (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def redistribute_weights(categories: List[CategoryScore]) -> Dict[str, float]:
+    """Redistribute weights proportionally among active categories."""
+    active = [c for c in categories if not c.skipped]
+    total_active_weight = sum(c.weight for c in active)
+    if total_active_weight <= 0:
+        return {}
+    return {c.name: c.weight / total_active_weight for c in active}
+
+
+def compute_overall_score(categories: List[CategoryScore]) -> float:
+    """Weighted geometric mean of category scores."""
+    weights = redistribute_weights(categories)
+    active = [c for c in categories if not c.skipped and c.score > 0]
+    if not active:
+        return 0.0
+    log_sum = sum(weights[c.name] * math.log(c.score) for c in active)
+    total_weight = sum(weights[c.name] for c in active)
+    if total_weight <= 0:
+        return 0.0
+    return math.exp(log_sum / total_weight)
