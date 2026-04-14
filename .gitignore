@@ -1,6 +1,10 @@
 # Output files
 system_report.json
 system_report.txt
+benchmark_report.json
+benchmark_report.txt
+_bench_*.tmp
+calibration_output.txt
 
 # Python
 __pycache__/
