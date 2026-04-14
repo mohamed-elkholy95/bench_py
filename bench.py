@@ -885,3 +885,106 @@ def bench_mem_copy(size_mb: int = 256) -> float:
     elapsed = time.monotonic() - start
     bytes_copied = n_elements * 8 * 2  # read + write
     return bytes_copied / elapsed / 1e9
+
+
+# ---------------------------------------------------------------------------
+# Task 10: Storage I/O Benchmarks
+# ---------------------------------------------------------------------------
+
+def _disable_file_cache(fd: int) -> None:
+    """Attempt to bypass OS file cache for more accurate I/O measurements."""
+    system = platform.system()
+    if system == "Darwin":
+        try:
+            import fcntl
+            fcntl.fcntl(fd, fcntl.F_NOCACHE, 1)
+        except (ImportError, OSError):
+            pass
+    elif system == "Linux":
+        try:
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        except (AttributeError, OSError):
+            pass
+
+
+def bench_disk_seq_write(output_dir: str, size_mb: int = 256) -> float:
+    """Sequential write. Returns MB/s."""
+    path = os.path.join(output_dir, f"_bench_seq_write_{os.getpid()}.tmp")
+    chunk = os.urandom(1024 * 1024)  # 1 MB chunk
+    try:
+        start = time.monotonic()
+        with open(path, "wb") as f:
+            for _ in range(size_mb):
+                f.write(chunk)
+            f.flush()
+            os.fsync(f.fileno())
+        elapsed = time.monotonic() - start
+        return size_mb / elapsed
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def bench_disk_seq_read(path: str) -> float:
+    """Sequential read. Returns MB/s."""
+    file_size = os.path.getsize(path)
+    chunk_size = 1024 * 1024  # 1 MB
+    with open(path, "rb") as f:
+        _disable_file_cache(f.fileno())
+        start = time.monotonic()
+        while True:
+            data = f.read(chunk_size)
+            if not data:
+                break
+        elapsed = time.monotonic() - start
+    return (file_size / (1024 * 1024)) / elapsed
+
+
+def bench_disk_random_write(output_dir: str, ops: int = 1000) -> float:
+    """Random 4K writes. Returns IOPS."""
+    block_size = 4096
+    path = os.path.join(output_dir, f"_bench_rnd_write_{os.getpid()}.tmp")
+    # Pre-allocate file large enough for random seeks
+    file_size = max(ops * block_size * 2, 4 * 1024 * 1024)
+    n_blocks = file_size // block_size
+    data = os.urandom(block_size)
+    try:
+        with open(path, "wb") as f:
+            f.write(b"\x00" * file_size)
+            f.flush()
+            os.fsync(f.fileno())
+        import random as _random
+        offsets = [_random.randint(0, n_blocks - 1) * block_size for _ in range(ops)]
+        start = time.monotonic()
+        with open(path, "r+b") as f:
+            for offset in offsets:
+                f.seek(offset)
+                f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        elapsed = time.monotonic() - start
+        return ops / elapsed
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def bench_disk_random_read(path: str, ops: int = 1000) -> float:
+    """Random 4K reads. Returns IOPS."""
+    block_size = 4096
+    file_size = os.path.getsize(path)
+    n_blocks = max(1, file_size // block_size)
+    import random as _random
+    offsets = [_random.randint(0, n_blocks - 1) * block_size for _ in range(ops)]
+    with open(path, "rb") as f:
+        _disable_file_cache(f.fileno())
+        start = time.monotonic()
+        for offset in offsets:
+            f.seek(offset)
+            f.read(block_size)
+        elapsed = time.monotonic() - start
+    return ops / elapsed

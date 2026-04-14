@@ -436,3 +436,37 @@ def test_bench_mem_random_access():
 def test_bench_mem_copy():
     from bench import bench_mem_copy
     assert bench_mem_copy(16) > 0
+
+
+# ---------------------------------------------------------------------------
+# Task 10: Storage I/O benchmarks
+# ---------------------------------------------------------------------------
+
+def test_bench_disk_seq_write():
+    from bench import bench_disk_seq_write
+    with tempfile.TemporaryDirectory() as tmpdir:
+        assert bench_disk_seq_write(tmpdir, 8) > 0
+
+
+def test_bench_disk_seq_read():
+    from bench import bench_disk_seq_read
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "test.bin")
+        with open(path, "wb") as f:
+            f.write(os.urandom(8 * 1024 * 1024))
+        assert bench_disk_seq_read(path) > 0
+
+
+def test_bench_disk_random_write():
+    from bench import bench_disk_random_write
+    with tempfile.TemporaryDirectory() as tmpdir:
+        assert bench_disk_random_write(tmpdir, 100) > 0
+
+
+def test_bench_disk_random_read():
+    from bench import bench_disk_random_read
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "test.bin")
+        with open(path, "wb") as f:
+            f.write(os.urandom(1024 * 1024))
+        assert bench_disk_random_read(path, 100) > 0
