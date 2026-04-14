@@ -1221,3 +1221,264 @@ def safe_benchmark(
         suggestion=suggestion,
         retries_attempted=retries_attempted,
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 12: BenchmarkOrchestrator
+# ---------------------------------------------------------------------------
+
+_CATEGORY_DISPLAY: Dict[str, str] = {
+    "cpu_single": "CPU Single-Core",
+    "cpu_multi":  "CPU Multi-Core",
+    "gpu":        "GPU Compute",
+    "memory":     "Memory",
+    "storage":    "Storage I/O",
+}
+
+class BenchmarkOrchestrator:
+    """Phased benchmark runner with cooldowns and preflight checks."""
+
+    def __init__(self, config: BenchConfig, system_info: Dict[str, Any]) -> None:
+        self._config = config
+        self._system_info = system_info
+        self._probe = SystemProbe()
+        self._cooldown = CooldownManager()
+        self._guard = ResourceGuard()
+        self._results: Dict[str, List[BenchmarkResult]] = {}
+        self._errors: List[BenchmarkError] = []
+        self._shutdown = False
+        self._total_cooldown: float = 0.0
+        self._phases_completed: int = 0
+        # Temp files created during storage benchmarks
+        self._temp_files: List[str] = []
+
+    def shutdown(self) -> None:
+        self._shutdown = True
+
+    def _resolve_categories(self) -> List[str]:
+        """Return the list of categories to run, respecting skip/only/MLX."""
+        all_categories = ["cpu_single", "cpu_multi", "gpu", "memory", "storage"]
+        if self._config.only_categories:
+            active = [c for c in all_categories if c in self._config.only_categories]
+        else:
+            active = [c for c in all_categories if c not in self._config.skip_categories]
+        # Skip GPU if MLX not available
+        if "gpu" in active and not HAS_MLX:
+            active.remove("gpu")
+        return active
+
+    def _run_warmup(self) -> None:
+        """Short numpy warmup computation."""
+        if not HAS_NUMPY:
+            return
+        try:
+            a = np.random.rand(64, 64)
+            b = np.random.rand(64, 64)
+            _ = np.dot(a, b)
+        except Exception:
+            pass
+
+    def _build_args(self, name: str, category: str, size: int) -> tuple:
+        """Build argument tuple for a benchmark function."""
+        config = self._config
+        if name == "disk_seq_write":
+            return (config.output_dir, size)
+        if name == "disk_seq_read":
+            # Write a temp file first, then pass the path
+            path = os.path.join(config.output_dir, f"_bench_seqread_{os.getpid()}.tmp")
+            write_mb = size if size > 0 else 8
+            chunk = os.urandom(1024 * 1024)
+            with open(path, "wb") as f:
+                for _ in range(write_mb):
+                    f.write(chunk)
+                f.flush()
+                os.fsync(f.fileno())
+            self._temp_files.append(path)
+            return (path,)
+        if name == "disk_random_write":
+            return (config.output_dir, size)
+        if name == "disk_random_read":
+            # Create temp file if needed
+            path = os.path.join(config.output_dir, f"_bench_rndread_{os.getpid()}.tmp")
+            if not os.path.exists(path):
+                block_size = 4096
+                file_size = max(size * block_size * 2, 4 * 1024 * 1024)
+                with open(path, "wb") as f:
+                    f.write(b"\x00" * file_size)
+                    f.flush()
+                    os.fsync(f.fileno())
+                self._temp_files.append(path)
+            return (path, size)
+        if name == "gpu_batch_matmul":
+            inner = 128 if config.quick else 512
+            return (size, inner)
+        if name == "mem_random_access":
+            accesses = 100_000 if config.quick else 1_000_000
+            return (size, accesses)
+        return (size,)
+
+    def _run_category(self, category: str) -> None:
+        """Run all benchmarks in a category."""
+        config = self._config
+        self._results.setdefault(category, [])
+
+        for name, cat, fn, default_size, unit in BENCHMARKS:
+            if cat != category:
+                continue
+            if self._shutdown:
+                break
+
+            # Determine size
+            if config.quick:
+                size = QUICK_SIZES.get(name, default_size)
+            else:
+                size = default_size
+
+            # Baseline value
+            baseline_key = f"{category}_{name}"
+            baseline_value = BASELINE.get(baseline_key, 1.0)
+
+            # Build args
+            args = self._build_args(name, category, size)
+
+            # Run
+            result, error = safe_benchmark(name, category, fn, args, unit, baseline_value, config)
+            if result is not None:
+                self._results[category].append(result)
+            if error is not None:
+                self._errors.append(error)
+
+    def _cleanup_temp_files(self) -> None:
+        for path in self._temp_files:
+            try:
+                if os.path.exists(path):
+                    os.unlink(path)
+            except OSError:
+                pass
+        self._temp_files.clear()
+
+    def _build_category_scores(self, active_categories: List[str]) -> List[CategoryScore]:
+        """Build CategoryScore objects from results."""
+        all_categories = ["cpu_single", "cpu_multi", "gpu", "memory", "storage"]
+        scores: List[CategoryScore] = []
+        for cat in all_categories:
+            weight = CATEGORY_WEIGHTS.get(cat, 0.0)
+            if cat not in active_categories:
+                scores.append(CategoryScore(
+                    name=cat, score=0.0, weight=weight, tests=[],
+                    skipped=True,
+                    skip_reason="not requested" if self._config.only_categories else "skipped by user" if cat in self._config.skip_categories else "MLX not available",
+                ))
+                continue
+            tests = self._results.get(cat, [])
+            if not tests:
+                scores.append(CategoryScore(
+                    name=cat, score=0.0, weight=weight, tests=[],
+                    skipped=True, skip_reason="no results",
+                ))
+                continue
+            test_scores = [t.score for t in tests if t.score > 0]
+            cat_score = geometric_mean(test_scores) if test_scores else 0.0
+            scores.append(CategoryScore(
+                name=cat, score=cat_score, weight=weight, tests=tests,
+            ))
+        return scores
+
+    def run(self) -> BenchmarkReport:
+        """Execute all benchmark phases and return a BenchmarkReport."""
+        import datetime
+        start_ts = time.monotonic()
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Pre-flight
+        readiness = self._probe.check()
+        pre_flight: Dict[str, Any] = {
+            "ready": readiness.ready,
+            "warnings": readiness.warnings,
+            "blockers": readiness.blockers,
+        }
+
+        active_categories = self._resolve_categories()
+
+        # Determine phase list
+        cooldown_policy = CooldownPolicy(min_seconds=0, max_seconds=0) if self._config.no_cooldown else CooldownPolicy()
+        phases_to_run = []
+        for phase in PHASE_ORDER:
+            if phase in (Phase.COOLDOWN_1, Phase.COOLDOWN_2) and self._config.no_cooldown:
+                continue
+            if phase in PHASE_TO_CATEGORY and PHASE_TO_CATEGORY[phase] not in active_categories:
+                continue
+            phases_to_run.append(phase)
+
+        phases_total = len(phases_to_run)
+
+        self._guard.start()
+        try:
+            for phase in phases_to_run:
+                if self._shutdown:
+                    break
+
+                if phase == Phase.WARMUP:
+                    self._run_warmup()
+
+                elif phase in (Phase.COOLDOWN_1, Phase.COOLDOWN_2):
+                    result = self._cooldown.wait(cooldown_policy)
+                    self._total_cooldown += result.get("waited_seconds", 0.0)
+
+                elif phase in PHASE_TO_CATEGORY:
+                    self._run_category(PHASE_TO_CATEGORY[phase])
+
+                elif phase == Phase.FINALIZE:
+                    pass  # Nothing to finalize
+
+                self._phases_completed += 1
+
+        finally:
+            resource_summary = self._guard.stop()
+            self._cleanup_temp_files()
+
+        duration = time.monotonic() - start_ts
+
+        # Build category scores
+        category_scores = self._build_category_scores(active_categories)
+        overall_score = compute_overall_score(category_scores)
+
+        # Integrity
+        degraded = [r.name for cats in self._results.values() for r in cats if r.degraded]
+        retried = [e.test for e in self._errors if e.retries_attempted > 0]
+        integrity = ReportIntegrity(
+            complete=(not self._shutdown),
+            degraded_tests=degraded,
+            cpu_fallback_tests=[],
+            retried_tests=retried,
+            partial=self._shutdown,
+            constrained=bool(readiness.warnings),
+        )
+
+        execution = ExecutionMetadata(
+            phases_completed=self._phases_completed,
+            phases_total=phases_total,
+            total_cooldown_seconds=self._total_cooldown,
+            peak_cpu_temp_c=None,
+            peak_ram_usage_mb=resource_summary.get("peak_ram_mb", 0.0),
+            pre_flight=pre_flight,
+            execution_mode="quick" if self._config.quick else "full",
+        )
+
+        skipped_names = [
+            e.test for e in self._errors
+        ]
+
+        return BenchmarkReport(
+            overall_score=round(overall_score, 2),
+            categories=category_scores,
+            baseline_machine=BASELINE_MACHINE,
+            baseline_version=BASELINE_VERSION,
+            system=self._system_info if self._system_info else None,
+            skipped=skipped_names,
+            errors=self._errors,
+            integrity=integrity,
+            execution=execution,
+            duration_seconds=round(duration, 3),
+            timestamp=timestamp,
+        )

@@ -519,3 +519,27 @@ def test_phase_enum_order():
 def test_category_weights_sum_to_one():
     from bench import CATEGORY_WEIGHTS
     assert abs(sum(CATEGORY_WEIGHTS.values()) - 1.0) < 0.001
+
+
+# ---------------------------------------------------------------------------
+# Task 12: BenchmarkOrchestrator
+# ---------------------------------------------------------------------------
+
+def test_orchestrator_quick_run():
+    from bench import BenchmarkOrchestrator, BenchConfig, BenchmarkReport
+    config = BenchConfig(quick=True, iterations=1, warmups=0,
+        skip_categories=["gpu", "storage"], no_cooldown=True, test_timeout=15, timeout=30)
+    orch = BenchmarkOrchestrator(config, system_info={})
+    report = orch.run()
+    assert isinstance(report, BenchmarkReport)
+    assert report.overall_score >= 0
+    assert len(report.categories) > 0
+
+
+def test_orchestrator_skip_all():
+    from bench import BenchmarkOrchestrator, BenchConfig
+    config = BenchConfig(quick=True, iterations=1, warmups=0,
+        skip_categories=["cpu_single", "cpu_multi", "gpu", "memory", "storage"], no_cooldown=True)
+    orch = BenchmarkOrchestrator(config, system_info={})
+    report = orch.run()
+    assert report.overall_score == 0.0
