@@ -414,6 +414,15 @@ def test_bench_gpu_batch_matmul():
     assert bench_gpu_batch_matmul(4, 128) > 0
 
 
+def test_bench_gpu_transfer():
+    from bench import bench_gpu_transfer, HAS_MLX
+    if not HAS_MLX:
+        pytest.skip("MLX not available")
+    result = bench_gpu_transfer(16)
+    assert isinstance(result, float)
+    assert result > 0
+
+
 # ---------------------------------------------------------------------------
 # Task 9: Memory benchmarks
 # ---------------------------------------------------------------------------
@@ -436,6 +445,13 @@ def test_bench_mem_random_access():
 def test_bench_mem_copy():
     from bench import bench_mem_copy
     assert bench_mem_copy(16) > 0
+
+
+def test_bench_mem_latency():
+    from bench import bench_mem_latency
+    result = bench_mem_latency(8)
+    assert isinstance(result, float)
+    assert result > 0  # returns ns
 
 
 # ---------------------------------------------------------------------------
@@ -476,9 +492,9 @@ def test_bench_disk_random_read():
 # Task 11: Registry, Phases, Baseline, safe_benchmark
 # ---------------------------------------------------------------------------
 
-def test_benchmark_registry_has_21_tests():
+def test_benchmark_registry_has_23_tests():
     from bench import BENCHMARKS
-    assert len(BENCHMARKS) == 21
+    assert len(BENCHMARKS) == 23
 
 
 def test_benchmark_registry_categories():

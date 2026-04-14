@@ -832,6 +832,28 @@ def bench_gpu_batch_matmul(batch: int = 64, size: int = 512) -> float:
     return flops / elapsed / 1e9
 
 
+def bench_gpu_transfer(size_mb: int = 256) -> float:
+    """Host-to-device memory transfer bandwidth. Returns GB/s.
+
+    Measures numpy->MLX array transfer speed (simulates host-to-device copy).
+    """
+    if not HAS_MLX:
+        raise ImportError("mlx is required for bench_gpu_transfer")
+    if not HAS_NUMPY:
+        raise ImportError("numpy is required for bench_gpu_transfer")
+    mlx_sync = _get_mlx_sync()
+    n = size_mb * 1024 * 1024 // 4  # float32 = 4 bytes
+    host_data = np.random.randn(n).astype(np.float32)
+    start = time.monotonic()
+    device_arr = mx.array(host_data)
+    mlx_sync(device_arr)
+    elapsed = time.monotonic() - start
+    if elapsed <= 0:
+        return 0.0
+    bytes_transferred = n * 4
+    return bytes_transferred / elapsed / 1e9
+
+
 # ---------------------------------------------------------------------------
 # Task 9: Memory Benchmarks
 # ---------------------------------------------------------------------------
@@ -886,6 +908,32 @@ def bench_mem_copy(size_mb: int = 256) -> float:
     elapsed = time.monotonic() - start
     bytes_copied = n_elements * 8 * 2  # read + write
     return bytes_copied / elapsed / 1e9
+
+
+def bench_mem_latency(size_mb: int = 64) -> float:
+    """Memory access latency via pointer-chasing. Returns ns (lower is better).
+
+    Creates a shuffled index chain and follows it sequentially,
+    defeating prefetcher to measure true random-access latency.
+    Score is inverted (1/latency) so higher = better for scoring.
+    """
+    if not HAS_NUMPY:
+        raise ImportError("numpy is required for bench_mem_latency")
+    n = (size_mb * 1024 * 1024) // 8  # float64 = 8 bytes
+    # Build a random pointer-chase chain
+    indices = np.arange(n, dtype=np.int64)
+    np.random.shuffle(indices)
+    # Follow the chain
+    steps = min(n, 500_000)
+    idx = 0
+    start = time.monotonic()
+    for _ in range(steps):
+        idx = int(indices[idx])
+    elapsed = time.monotonic() - start
+    if elapsed <= 0:
+        return 0.0
+    latency_ns = (elapsed / steps) * 1e9
+    return latency_ns
 
 
 # ---------------------------------------------------------------------------
@@ -1012,11 +1060,13 @@ BENCHMARKS: List[Tuple[str, str, Callable, int, str]] = [
     ("gpu_elementwise",   "gpu",        bench_gpu_elementwise,   32_000_000,  "GB/s"),
     ("gpu_reduction",     "gpu",        bench_gpu_reduction,     64_000_000,  "GB/s"),
     ("gpu_batch_matmul",  "gpu",        bench_gpu_batch_matmul,  64,          "GFLOPS"),
+    ("gpu_transfer",      "gpu",        bench_gpu_transfer,      256,         "GB/s"),
     # Memory
     ("mem_seq_read",      "memory",     bench_mem_seq_read,      256,         "GB/s"),
     ("mem_seq_write",     "memory",     bench_mem_seq_write,     256,         "GB/s"),
     ("mem_random_access", "memory",     bench_mem_random_access, 256,         "M_accesses/sec"),
     ("mem_copy",          "memory",     bench_mem_copy,          256,         "GB/s"),
+    ("mem_latency",       "memory",     bench_mem_latency,       64,          "ns"),
     # Storage
     ("disk_seq_write",    "storage",    bench_disk_seq_write,    256,         "MB/s"),
     ("disk_seq_read",     "storage",    bench_disk_seq_read,     0,           "MB/s"),
@@ -1047,10 +1097,12 @@ QUICK_SIZES: Dict[str, int] = {
     "gpu_elementwise":   1_000_000,
     "gpu_reduction":     2_000_000,
     "gpu_batch_matmul":  4,
+    "gpu_transfer":      32,
     "mem_seq_read":      8,
     "mem_seq_write":     8,
     "mem_random_access": 8,
     "mem_copy":          8,
+    "mem_latency":       8,
     "disk_seq_write":    8,
     "disk_seq_read":     0,
     "disk_random_write": 50,
@@ -1106,10 +1158,12 @@ BASELINE: Dict[str, float] = {
     "gpu_gpu_elementwise":          123.98,          # GB/s
     "gpu_gpu_reduction":            341.70,          # GB/s
     "gpu_gpu_batch_matmul":         9222.44,         # GFLOPS
+    "gpu_gpu_transfer":             72.37,           # GB/s
     "memory_mem_seq_read":          69.33,           # GB/s
     "memory_mem_seq_write":         135.97,          # GB/s
     "memory_mem_random_access":     236.76,          # M_accesses/sec
     "memory_mem_copy":              143.82,          # GB/s
+    "memory_mem_latency":           96.75,           # ns
     "storage_disk_seq_write":       7092.38,         # MB/s
     "storage_disk_seq_read":        28725.31,        # MB/s
     "storage_disk_random_write":    244391.70,       # IOPS
@@ -1142,6 +1196,10 @@ def _suggest_bench_fix(name: str, exc: Exception) -> str:
     if isinstance(exc, (TestTimeout,)):
         return "Increase --test-timeout or use --quick mode."
     return f"Unexpected error in '{name}': {exc}"
+
+
+# Metrics where lower raw value = better (score inverted: baseline/measured)
+_INVERTED_METRICS = {"mem_latency"}
 
 
 def safe_benchmark(
@@ -1186,7 +1244,10 @@ def safe_benchmark(
             median_raw = compute_median(raw_values)
             median_time = compute_median(times)
             std_dev = statistics.stdev(times) if len(times) > 1 else 0.0
-            score = compute_test_score(median_raw, baseline_value)
+            if name in _INVERTED_METRICS and median_raw > 0:
+                score = compute_test_score(baseline_value, median_raw)
+            else:
+                score = compute_test_score(median_raw, baseline_value)
             return BenchmarkResult(
                 name=name,
                 category=category,
@@ -1720,16 +1781,23 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
         rows = [
             ("Matrix", "gpu_matrix", "Element-wise", "gpu_elementwise"),
             ("Batch", "gpu_batch_matmul", "Reduction", "gpu_reduction"),
+            (None, None, "Host-Dev", "gpu_transfer"),
         ]
         for l_label, l_name, r_label, r_name in rows:
-            l_test = _test_by_name(gt, l_name)
-            r_test = _test_by_name(gt, r_name)
-            l_score = _score_color(c, l_test.score) if l_test else "     "
-            l_raw = c.dim(_format_raw(l_test.raw_value, l_test.unit)) if l_test else ""
-            r_score = _score_color(c, r_test.score) if r_test else "     "
-            r_raw = c.dim(_format_raw(r_test.raw_value, r_test.unit)) if r_test else ""
-            left = f"  {l_label:<10} {l_score:>6} {l_raw}"
-            right = f"{r_label:<12} {r_score:>6} {r_raw}"
+            l_test = _test_by_name(gt, l_name) if l_name else None
+            r_test = _test_by_name(gt, r_name) if r_name else None
+            if l_label and l_test:
+                l_score = _score_color(c, l_test.score)
+                l_raw = c.dim(_format_raw(l_test.raw_value, l_test.unit))
+                left = f"  {l_label:<10} {l_score:>6} {l_raw}"
+            else:
+                left = f"  {'':10} {'':>6} " if l_label is None else f"  {l_label:<10} {'--':>6}"
+            if r_label and r_test:
+                r_score = _score_color(c, r_test.score)
+                r_raw = c.dim(_format_raw(r_test.raw_value, r_test.unit))
+                right = f"{r_label:<12} {r_score:>6} {r_raw}"
+            else:
+                right = ""
             lines.append(f"{_pad(left, 38)}{right}")
 
         lines.append("")
@@ -1752,16 +1820,23 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
         rows = [
             ("Read", "mem_seq_read", "Random", "mem_random_access"),
             ("Write", "mem_seq_write", "Copy", "mem_copy"),
+            (None, None, "Latency", "mem_latency"),
         ]
         for l_label, l_name, r_label, r_name in rows:
-            l_test = _test_by_name(mt, l_name)
-            r_test = _test_by_name(mt, r_name)
-            l_score = _score_color(c, l_test.score) if l_test else "     "
-            l_raw = c.dim(_format_raw(l_test.raw_value, l_test.unit)) if l_test else ""
-            r_score = _score_color(c, r_test.score) if r_test else "     "
-            r_raw = c.dim(_format_raw(r_test.raw_value, r_test.unit)) if r_test else ""
-            left = f"  {l_label:<10} {l_score:>6} {l_raw}"
-            right = f"{r_label:<10} {r_score:>6} {r_raw}"
+            l_test = _test_by_name(mt, l_name) if l_name else None
+            r_test = _test_by_name(mt, r_name) if r_name else None
+            if l_label and l_test:
+                l_score = _score_color(c, l_test.score)
+                l_raw = c.dim(_format_raw(l_test.raw_value, l_test.unit))
+                left = f"  {l_label:<10} {l_score:>6} {l_raw}"
+            else:
+                left = f"  {'':10} {'':>6} " if l_label is None else f"  {l_label:<10} {'--':>6}"
+            if r_label and r_test:
+                r_score = _score_color(c, r_test.score)
+                r_raw = c.dim(_format_raw(r_test.raw_value, r_test.unit))
+                right = f"{r_label:<10} {r_score:>6} {r_raw}"
+            else:
+                right = ""
             lines.append(f"{_pad(left, 38)}{right}")
 
         lines.append("")
