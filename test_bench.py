@@ -61,3 +61,82 @@ def test_classify_bench_error():
     assert classify_bench_error(PermissionError("x")) == "permission_denied"
     assert classify_bench_error(OSError("x")) == "io_error"
     assert classify_bench_error(RuntimeError("x")) == "unexpected"
+
+# ---------------------------------------------------------------------------
+# Dataclasses
+# ---------------------------------------------------------------------------
+
+def test_benchmark_result_defaults():
+    from bench import BenchmarkResult
+    r = BenchmarkResult(
+        name="test", category="cpu_single", raw_value=100.0,
+        unit="ops/sec", score=1000.0, iterations=5, warmups=3,
+        median_time=0.01, std_dev=0.001, times=[0.01, 0.01, 0.01, 0.01, 0.01],
+    )
+    assert r.degraded is False
+    assert r.resource_summary is None
+
+
+def test_category_score_defaults():
+    from bench import CategoryScore
+    c = CategoryScore(name="cpu_single", score=1000.0, weight=0.25, tests=[])
+    assert c.skipped is False
+    assert c.skip_reason is None
+
+
+def test_benchmark_error_fields():
+    from bench import BenchmarkError
+    e = BenchmarkError(
+        test="gpu_matrix", category="gpu", error_type="missing_dependency",
+        message="MLX not available", suggestion="pip install mlx",
+    )
+    assert e.retries_attempted == 0
+
+
+def test_report_integrity_defaults():
+    from bench import ReportIntegrity
+    ri = ReportIntegrity(
+        complete=True, degraded_tests=[], cpu_fallback_tests=[],
+        retried_tests=[], partial=False, constrained=False,
+    )
+    assert ri.complete is True
+
+
+def test_benchmark_report_json_roundtrip():
+    from bench import (
+        BenchmarkReport, CategoryScore, BenchmarkResult,
+        ReportIntegrity, ExecutionMetadata, report_to_dict,
+    )
+    result = BenchmarkResult(
+        name="prime_sieve", category="cpu_single", raw_value=823.5,
+        unit="ops/sec", score=1000.0, iterations=5, warmups=3,
+        median_time=0.00121, std_dev=0.00003,
+        times=[0.00121, 0.00122, 0.00120, 0.00121, 0.00123],
+    )
+    cat = CategoryScore(
+        name="cpu_single", score=1000.0, weight=0.25, tests=[result],
+    )
+    integrity = ReportIntegrity(
+        complete=True, degraded_tests=[], cpu_fallback_tests=[],
+        retried_tests=[], partial=False, constrained=False,
+    )
+    execution = ExecutionMetadata(
+        phases_completed=8, phases_total=8, total_cooldown_seconds=12.0,
+        peak_cpu_temp_c=78.0, peak_ram_usage_mb=4200.0,
+        pre_flight={}, execution_mode="full",
+    )
+    report = BenchmarkReport(
+        overall_score=1000.0, categories=[cat],
+        baseline_machine="Apple M4 Max / 36GB / macOS",
+        baseline_version="1.0", system=None, skipped=[],
+        errors=[], integrity=integrity, execution=execution,
+        duration_seconds=45.0, timestamp="2026-04-13T20:00:00Z",
+    )
+    d = report_to_dict(report)
+    json_str = json.dumps(d)
+    loaded = json.loads(json_str)
+    assert loaded["overall_score"] == 1000.0
+    assert loaded["categories"][0]["name"] == "cpu_single"
+    assert loaded["categories"][0]["tests"][0]["name"] == "prime_sieve"
+    assert "system" not in loaded  # None values stripped
+    assert loaded["integrity"]["complete"] is True

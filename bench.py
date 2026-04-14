@@ -105,3 +105,114 @@ def classify_bench_error(exc: Exception) -> str:
     if isinstance(exc, OSError):
         return "io_error"
     return "unexpected"
+
+# ---------------------------------------------------------------------------
+# Dataclasses
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BenchmarkResult:
+    name: str
+    category: str
+    raw_value: float
+    unit: str
+    score: float
+    iterations: int
+    warmups: int
+    median_time: float
+    std_dev: float
+    times: List[float]
+    degraded: bool = False
+    resource_summary: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class CategoryScore:
+    name: str
+    score: float
+    weight: float
+    tests: List[BenchmarkResult]
+    skipped: bool = False
+    skip_reason: Optional[str] = None
+
+
+@dataclass
+class BenchmarkError:
+    test: str
+    category: str
+    error_type: str
+    message: str
+    suggestion: str
+    retries_attempted: int = 0
+
+
+@dataclass
+class ReportIntegrity:
+    complete: bool
+    degraded_tests: List[str]
+    cpu_fallback_tests: List[str]
+    retried_tests: List[str]
+    partial: bool
+    constrained: bool
+
+
+@dataclass
+class ExecutionMetadata:
+    phases_completed: int
+    phases_total: int
+    total_cooldown_seconds: float
+    peak_cpu_temp_c: Optional[float]
+    peak_ram_usage_mb: float
+    pre_flight: Dict[str, Any]
+    execution_mode: str
+
+
+@dataclass
+class BenchmarkReport:
+    overall_score: float
+    categories: List[CategoryScore]
+    baseline_machine: str
+    baseline_version: str
+    system: Optional[Dict[str, Any]]
+    skipped: List[str]
+    errors: List[BenchmarkError]
+    integrity: ReportIntegrity
+    execution: ExecutionMetadata
+    duration_seconds: float
+    timestamp: str
+
+
+@dataclass
+class BenchConfig:
+    iterations: int = 5
+    warmups: int = 3
+    test_timeout: int = 30
+    timeout: int = 60
+    skip_categories: List[str] = field(default_factory=list)
+    only_categories: List[str] = field(default_factory=list)
+    quick: bool = False
+    no_cooldown: bool = False
+    calibrate: bool = False
+    json_only: bool = False
+    no_color: bool = False
+    verbose: bool = False
+    output_dir: str = "."
+    system_report_path: str = "./system_report.json"
+
+
+# ---------------------------------------------------------------------------
+# JSON serialization
+# ---------------------------------------------------------------------------
+
+def _clean_none(d: Any) -> Any:
+    """Recursively remove None values from dicts for clean JSON."""
+    if isinstance(d, dict):
+        return {k: _clean_none(v) for k, v in d.items() if v is not None}
+    if isinstance(d, list):
+        return [_clean_none(i) for i in d]
+    return d
+
+
+def report_to_dict(report: BenchmarkReport) -> Dict[str, Any]:
+    """Convert a BenchmarkReport to a JSON-friendly dict with None values removed."""
+    return _clean_none(asdict(report))
