@@ -581,8 +581,9 @@ def _make_sample_report():
 def test_format_terminal_produces_output():
     from bench import format_terminal
     output = format_terminal(_make_sample_report(), use_color=False)
-    assert "OVERALL SCORE" in output
+    assert "BENCHMARK SCORE" in output
     assert "10.0" in output
+    assert "System Information" in output
 
 
 def test_format_terminal_no_ansi():
@@ -600,7 +601,9 @@ def test_format_json_valid():
 
 def test_format_text_no_ansi():
     from bench import format_text
-    assert "\033[" not in format_text(_make_sample_report())
+    output = format_text(_make_sample_report())
+    assert "\033[" not in output
+    assert "BENCHMARK SCORE" in output
 
 
 def test_save_outputs_creates_files():

@@ -22,6 +22,7 @@ import math
 import multiprocessing
 import os
 import platform
+import re
 import signal
 import statistics
 import subprocess
@@ -1537,51 +1538,285 @@ def _score_color(c: _Color, score: float) -> str:
     return c.red(text)
 
 
+def _visible_len(s: str) -> int:
+    """Length of string with ANSI escape codes stripped."""
+    return len(re.sub(r"\033\[[0-9;]*m", "", s))
+
+
+def _pad(s: str, width: int) -> str:
+    """Pad string to width based on visible length (ignoring ANSI codes)."""
+    return s + " " * max(0, width - _visible_len(s))
+
+
+def _assess_performance(score: float) -> str:
+    """Return a NovaBench-style performance assessment string."""
+    if score >= 11.0:
+        return "performing above the typical range"
+    if score >= 9.0:
+        return "performing within the expected range"
+    if score >= 7.0:
+        return "performing below the typical range"
+    return "performing significantly below expectations"
+
+
+def _get_sys(report: BenchmarkReport, *keys: str) -> Optional[str]:
+    """Safely extract a nested value from report.system dict."""
+    d: Any = report.system
+    if not d:
+        return None
+    for key in keys:
+        if isinstance(d, dict):
+            d = d.get(key)
+        elif isinstance(d, list) and d:
+            d = d[0]
+            if isinstance(d, dict):
+                d = d.get(key)
+            else:
+                return None
+        else:
+            return None
+    return str(d) if d is not None else None
+
+
+def _test_by_name(cat_tests: List[BenchmarkResult], name: str) -> Optional[BenchmarkResult]:
+    """Find a test result by name."""
+    for t in cat_tests:
+        if t.name == name:
+            return t
+    return None
+
+
+def _fmt_test(c: _Color, test: Optional[BenchmarkResult], label: str, w: int = 14) -> str:
+    """Format a single test as 'Label   score  raw_value'."""
+    if test is None:
+        return f"  {label:<{w}} {c.dim('--'):>6}  {c.dim('--')}"
+    score_str = _score_color(c, test.score)
+    raw_str = _format_raw(test.raw_value, test.unit)
+    return f"  {label:<{w}} {score_str:>6}  {c.dim(raw_str)}"
+
+
+def _card_header(c: _Color, hw_name: str, score: float, W: int) -> List[str]:
+    """Render a category card header with hardware name and score."""
+    score_str = _score_color(c, score)
+    sep = "-" if not c._enabled else "\u2500"
+    lines = [
+        "",
+        f"  {c.bold(score_str)}  {c.bold(hw_name)}",
+        f"  {sep * (W - 4)}",
+    ]
+    return lines
+
+
 def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
-    """Render a human-readable benchmark report with optional ANSI color."""
+    """Render a professional benchmark report in NovaBench card style."""
     c = _Color(use_color)
     lines: List[str] = []
+    W = 62
+    sep_heavy = "=" if not c._enabled else "\u2550"
+    sep_light = "-" if not c._enabled else "\u2500"
+    vline = "|" if not c._enabled else "\u2502"
 
-    # Header
-    lines.append(c.bold("=" * 60))
-    lines.append(c.bold("  SYSTEM BENCHMARK REPORT"))
-    lines.append(c.bold("=" * 60))
-    lines.append(f"  Timestamp : {report.timestamp}")
-    lines.append(f"  Duration  : {report.duration_seconds:.1f}s")
-    lines.append(f"  Baseline  : {report.baseline_machine}")
-    lines.append(c.bold("-" * 60))
+    # --- Extract system info ---
+    cpu_model = _get_sys(report, "cpu", "model") or "Unknown CPU"
+    cores_p = _get_sys(report, "cpu", "cores_physical") or "?"
+    cores_l = _get_sys(report, "cpu", "cores_logical") or "?"
+    arch = _get_sys(report, "os", "arch") or ""
+    gpu_model = _get_sys(report, "gpu", "model") or "Unknown GPU"
+    gpu_vram = _get_sys(report, "gpu", "vram_gb")
+    gpu_unified = _get_sys(report, "gpu", "unified")
+    mem_total = _get_sys(report, "memory", "total_gb") or "?"
+    mem_type = _get_sys(report, "memory", "type") or ""
+    storage_dev = _get_sys(report, "storage", "device") or "Unknown"
+    storage_total = _get_sys(report, "storage", "total_gb")
+    storage_type = _get_sys(report, "storage", "disk_type") or ""
+    os_type = _get_sys(report, "os", "type") or ""
+    os_version = _get_sys(report, "os", "version") or ""
+    hostname = _get_sys(report, "os", "hostname") or ""
+    kernel = _get_sys(report, "os", "kernel") or ""
 
-    # Per-category results
-    for cat in report.categories:
-        display = _CATEGORY_DISPLAY.get(cat.name, cat.name)
-        if cat.skipped:
-            lines.append(f"  {c.dim(display):<24} {c.dim('-- skipped')}")
-            continue
-        cat_score_str = _score_color(c, cat.score)
-        lines.append(c.bold(f"  {display}") + f"  ({cat_score_str})")
-        for test in cat.tests:
-            score_str = _score_color(c, test.score)
-            raw_str = _format_raw(test.raw_value, test.unit)
-            lines.append(f"    {test.name:<22} {score_str:>6}  {c.dim(raw_str)}")
-        lines.append("")
+    # --- Build category lookup ---
+    cats: Dict[str, CategoryScore] = {cat.name: cat for cat in report.categories}
 
-    # Overall score
-    lines.append(c.bold("-" * 60))
+    # === HEADER ===
+    lines.append(sep_heavy * W)
     overall_str = _score_color(c, report.overall_score)
-    lines.append(c.bold(f"  OVERALL SCORE : {overall_str}") + c.dim("  /10"))
+    lines.append(c.bold(f"  BENCHMARK SCORE   {overall_str}") + c.dim(" /10"))
+    ts_short = report.timestamp[:10] if report.timestamp else ""
+    lines.append(c.dim(f"  {ts_short}"))
+    lines.append(sep_heavy * W)
+
+    # === SCORE BADGES ===
+    badges = []
+    badge_order = ["cpu_single", "cpu_multi", "gpu", "memory", "storage"]
+    badge_labels = {"cpu_single": "CPU.s", "cpu_multi": "CPU.m", "gpu": "GPU", "memory": "Mem", "storage": "Disk"}
+    for name in badge_order:
+        cat = cats.get(name)
+        if cat and not cat.skipped:
+            score_str = _score_color(c, cat.score)
+            badges.append(f"{badge_labels[name]} {score_str}")
+        elif cat and cat.skipped:
+            badges.append(c.dim(f"{badge_labels[name]} --"))
+    lines.append("  " + "   ".join(badges))
     lines.append("")
 
-    # Category summary bar
-    for cat in report.categories:
-        if cat.skipped:
-            continue
-        display = _CATEGORY_DISPLAY.get(cat.name, cat.name)
-        score_str = _score_color(c, cat.score)
-        bar_len = max(0, min(30, int(cat.score * 3)))  # 10.0 = 30 chars
-        bar = "=" * bar_len
-        lines.append(f"  {display:<20} {score_str:>6} {c.dim(bar)}")
+    # === CPU CARD ===
+    cpu_s = cats.get("cpu_single")
+    cpu_m = cats.get("cpu_multi")
+    if cpu_s and not cpu_s.skipped:
+        cpu_score = cpu_s.score
+        if cpu_m and not cpu_m.skipped:
+            cpu_score = (cpu_s.score + cpu_m.score) / 2
+        lines.extend(_card_header(c, f"CPU: {cpu_model}", cpu_score, W))
+        lines.append(c.dim(f"  {cores_p} cores / {cores_l} threads, {arch}"))
+        lines.append("")
 
-    lines.append(c.bold("=" * 60))
+        # Two-column: Single-Core | Multi-Core
+        lines.append(f"  {'Single-Core Results':<28} {'Multi-Core Results'}")
+        sc = cpu_s.tests if cpu_s else []
+        mc = cpu_m.tests if (cpu_m and not cpu_m.skipped) else []
+
+        rows = [
+            ("Integer", "prime_sieve", "Matrix", "matrix_full"),
+            ("Float", "mandelbrot", "Parallel", "parallel_compute"),
+            ("Matrix", "matrix_1t", "Crypto", "hash_throughput"),
+            ("Compress", "compression", "Sort", "parallel_sort"),
+            ("Sort", "sort", None, None),
+        ]
+        for l_label, l_name, r_label, r_name in rows:
+            l_test = _test_by_name(sc, l_name) if l_name else None
+            r_test = _test_by_name(mc, r_name) if r_name else None
+            l_score = _score_color(c, l_test.score) if l_test else "     "
+            l_raw = c.dim(_format_raw(l_test.raw_value, l_test.unit)) if l_test else ""
+            left = f"  {l_label:<10} {l_score:>6} {l_raw}"
+
+            if r_label and r_test:
+                r_score = _score_color(c, r_test.score)
+                r_raw = c.dim(_format_raw(r_test.raw_value, r_test.unit))
+                right = f"{r_label:<10} {r_score:>6} {r_raw}"
+            elif r_label:
+                right = ""
+            else:
+                right = ""
+            lines.append(f"{_pad(left, 38)}{right}")
+
+        lines.append("")
+        assess = _assess_performance(cpu_score)
+        lines.append(c.dim(f"  > CPU is {assess}"))
+    elif cpu_s and cpu_s.skipped:
+        lines.append(c.dim(f"\n  CPU: skipped"))
+
+    # === GPU CARD ===
+    gpu_cat = cats.get("gpu")
+    if gpu_cat and not gpu_cat.skipped:
+        vram_str = f"{gpu_vram} GB" if gpu_vram else ""
+        unified_str = " Unified" if gpu_unified == "True" else ""
+        lines.extend(_card_header(c, f"GPU: {gpu_model}", gpu_cat.score, W))
+        if vram_str:
+            lines.append(c.dim(f"  {vram_str}{unified_str} Memory"))
+        lines.append("")
+
+        lines.append(f"  {'Compute Results':<28} {'Transfer Results'}")
+        gt = gpu_cat.tests
+        rows = [
+            ("Matrix", "gpu_matrix", "Element-wise", "gpu_elementwise"),
+            ("Batch", "gpu_batch_matmul", "Reduction", "gpu_reduction"),
+        ]
+        for l_label, l_name, r_label, r_name in rows:
+            l_test = _test_by_name(gt, l_name)
+            r_test = _test_by_name(gt, r_name)
+            l_score = _score_color(c, l_test.score) if l_test else "     "
+            l_raw = c.dim(_format_raw(l_test.raw_value, l_test.unit)) if l_test else ""
+            r_score = _score_color(c, r_test.score) if r_test else "     "
+            r_raw = c.dim(_format_raw(r_test.raw_value, r_test.unit)) if r_test else ""
+            left = f"  {l_label:<10} {l_score:>6} {l_raw}"
+            right = f"{r_label:<12} {r_score:>6} {r_raw}"
+            lines.append(f"{_pad(left, 38)}{right}")
+
+        lines.append("")
+        assess = _assess_performance(gpu_cat.score)
+        lines.append(c.dim(f"  > GPU is {assess}"))
+    elif gpu_cat and gpu_cat.skipped:
+        lines.append(c.dim(f"\n  GPU: skipped (MLX not available)"))
+
+    # === MEMORY CARD ===
+    mem_cat = cats.get("memory")
+    if mem_cat and not mem_cat.skipped:
+        mem_label = f"Memory: {mem_total} GB"
+        if mem_type:
+            mem_label += f" {mem_type}"
+        lines.extend(_card_header(c, mem_label, mem_cat.score, W))
+        lines.append("")
+
+        lines.append(f"  {'Bandwidth Results':<28} {'Access Results'}")
+        mt = mem_cat.tests
+        rows = [
+            ("Read", "mem_seq_read", "Random", "mem_random_access"),
+            ("Write", "mem_seq_write", "Copy", "mem_copy"),
+        ]
+        for l_label, l_name, r_label, r_name in rows:
+            l_test = _test_by_name(mt, l_name)
+            r_test = _test_by_name(mt, r_name)
+            l_score = _score_color(c, l_test.score) if l_test else "     "
+            l_raw = c.dim(_format_raw(l_test.raw_value, l_test.unit)) if l_test else ""
+            r_score = _score_color(c, r_test.score) if r_test else "     "
+            r_raw = c.dim(_format_raw(r_test.raw_value, r_test.unit)) if r_test else ""
+            left = f"  {l_label:<10} {l_score:>6} {l_raw}"
+            right = f"{r_label:<10} {r_score:>6} {r_raw}"
+            lines.append(f"{_pad(left, 38)}{right}")
+
+        lines.append("")
+        assess = _assess_performance(mem_cat.score)
+        lines.append(c.dim(f"  > Memory is {assess}"))
+    elif mem_cat and mem_cat.skipped:
+        lines.append(c.dim(f"\n  Memory: skipped"))
+
+    # === STORAGE CARD ===
+    stor_cat = cats.get("storage")
+    if stor_cat and not stor_cat.skipped:
+        stor_label = storage_dev
+        if storage_total:
+            stor_label += f" {storage_total} GB"
+        if storage_type:
+            stor_label += f" {storage_type}"
+        lines.extend(_card_header(c, f"Storage: {stor_label}", stor_cat.score, W))
+        lines.append("")
+
+        lines.append(f"  {'Write Results':<28} {'Read Results'}")
+        st = stor_cat.tests
+        rows = [
+            ("Sequential", "disk_seq_write", "Sequential", "disk_seq_read"),
+            ("Random", "disk_random_write", "Random", "disk_random_read"),
+        ]
+        for l_label, l_name, r_label, r_name in rows:
+            l_test = _test_by_name(st, l_name)
+            r_test = _test_by_name(st, r_name)
+            l_score = _score_color(c, l_test.score) if l_test else "     "
+            l_raw = c.dim(_format_raw(l_test.raw_value, l_test.unit)) if l_test else ""
+            r_score = _score_color(c, r_test.score) if r_test else "     "
+            r_raw = c.dim(_format_raw(r_test.raw_value, r_test.unit)) if r_test else ""
+            left = f"  {l_label:<10} {l_score:>6} {l_raw}"
+            right = f"{r_label:<10} {r_score:>6} {r_raw}"
+            lines.append(f"{_pad(left, 38)}{right}")
+
+        lines.append("")
+        assess = _assess_performance(stor_cat.score)
+        lines.append(c.dim(f"  > Storage is {assess}"))
+    elif stor_cat and stor_cat.skipped:
+        lines.append(c.dim(f"\n  Storage: skipped"))
+
+    # === SYSTEM INFO ===
+    lines.append("")
+    lines.append(sep_heavy * W)
+    lines.append(c.bold("  System Information"))
+    lines.append(f"  {sep_light * (W - 4)}")
+    if os_type or os_version:
+        lines.append(f"  {'OS':<16}{os_type} {os_version} ({arch})")
+    if hostname:
+        host_short = hostname.split(".")[0] if "." in hostname else hostname
+        lines.append(f"  {'Hostname':<16}{host_short}")
+    lines.append(f"  {'Baseline':<16}{report.baseline_machine}")
+    lines.append(f"  {'Duration':<16}{report.duration_seconds:.1f}s")
+    lines.append(f"  {'Version':<16}{report.baseline_version}")
 
     # Errors
     if report.errors:
@@ -1589,13 +1824,13 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
         lines.append(c.yellow(f"  Errors ({len(report.errors)}):"))
         for err in report.errors:
             lines.append(c.red(f"    [{err.error_type}] {err.test}: {err.message}"))
-            lines.append(c.dim(f"      -> {err.suggestion}"))
+            lines.append(c.dim(f"      > {err.suggestion}"))
 
-    # Footer
-    lines.append("")
-    lines.append(c.dim(f"  Baseline version: {report.baseline_version}"))
     if report.integrity and not report.integrity.complete:
-        lines.append(c.yellow("  WARNING: Benchmark run was interrupted."))
+        lines.append(c.yellow("  WARNING: Benchmark run was incomplete."))
+
+    lines.append(sep_heavy * W)
+    lines.append("")
 
     return "\n".join(lines)
 
