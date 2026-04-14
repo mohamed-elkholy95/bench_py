@@ -1,150 +1,233 @@
-# python_info
+<div align="center">
 
-A comprehensive, cross-platform system information and benchmarking toolkit written in pure Python. Discover your hardware, software, and peripherals with `fetch.py`, then measure real-world performance across CPU, GPU, memory, and storage with `bench.py`.
+# Bench_py
 
----
+### System Discovery & Performance Scoring Toolkit
 
-## Features
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-00C853?style=for-the-badge&logo=apple&logoColor=white)](.)
+[![License](https://img.shields.io/badge/License-MIT-F5C518?style=for-the-badge)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/mohamed-elkholy95/bench_py?style=for-the-badge&logo=github&color=E040FB)](https://github.com/mohamed-elkholy95/bench_py/stargazers)
 
-### System Fetch (`fetch.py`)
+<br/>
 
-Collects a full inventory of your machine in seconds:
+**Discover your hardware. Measure your performance. Compare your score.**
 
-| Category | Details |
-|----------|---------|
-| **OS & Hardware** | OS version, kernel, architecture, hostname |
-| **CPU** | Model, physical/logical cores, frequency, features |
-| **Memory** | Total capacity, type (DDR4/DDR5/LPDDR5), speed |
-| **GPU** | Model, VRAM, unified memory detection (Apple Silicon) |
-| **Storage** | Devices, mount points, capacity, free space, disk type |
-| **Network** | Interfaces, IPv4/IPv6, MAC addresses, link speed, status |
-| **Battery** | Charge level, power source, time remaining |
-| **Peripherals** | Displays (resolution/refresh), audio devices, Bluetooth |
-| **Sensors** | CPU temperature, fan speeds |
-| **Python** | Installations, conda/venv environments, active env |
-| **Dev Tools** | git, docker, node, gcc, clang, cmake, curl, and more |
-| **Packages** | Homebrew, apt, pip, npm — package counts |
-| **Services** | Running services (Ollama, Docker, databases, etc.) |
+Bench_py is a zero-config, cross-platform toolkit that collects a complete hardware & software inventory of your machine, then benchmarks CPU, GPU, memory, and storage — producing a single normalized score you can compare across systems.
 
-### System Benchmark (`bench.py`)
+<br/>
 
-Runs isolated, scored benchmarks across five categories:
-
-| Category | Weight | Tests |
-|----------|--------|-------|
-| **CPU Single-Core** | 25% | Prime sieve, Mandelbrot set, matrix multiply, zlib compression, array sort |
-| **CPU Multi-Core** | 25% | Parallel matrix multiply, parallel compute, hash throughput, parallel sort |
-| **GPU Compute** | 20% | Matrix multiply, elementwise ops, reduction, batch matmul (Apple MLX) |
-| **Memory** | 15% | Sequential read/write, random access, memory copy |
-| **Storage I/O** | 15% | Sequential read/write, random read/write (with OS cache bypass) |
-
-Scores are normalized against a baseline machine (10.0 = baseline). The overall score is a weighted geometric mean across all categories.
+[Get Started](#-quick-start) · [Features](#-what-it-does) · [Sample Output](#-sample-output) · [Architecture](#-architecture)
 
 ---
 
-## Quick Start
+</div>
+
+<br/>
+
+## **Why Bench_py?**
+
+> Most system tools do one thing — either fetch specs _or_ run benchmarks. Bench_py does both in two commands, with structured JSON output, graceful error handling, and zero mandatory dependencies for system discovery.
+
+<br/>
+
+## **What It Does**
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### `fetch.py` — System Discovery
+
+Collects a **complete inventory** of your machine in ~1 second:
+
+| | Category | Details |
+|---|----------|---------|
+| **1** | OS & Hardware | Version, kernel, architecture |
+| **2** | CPU | Model, cores, threads, frequency |
+| **3** | Memory | Capacity, type, speed |
+| **4** | GPU | Model, VRAM, unified memory |
+| **5** | Storage | Devices, capacity, free space |
+| **6** | Network | Interfaces, IPs, link status |
+| **7** | Battery | Charge, power source, time left |
+| **8** | Peripherals | Displays, audio, Bluetooth |
+| **9** | Sensors | Temperatures, fan speeds |
+| **10** | Python | Installs, envs, active env |
+| **11** | Dev Tools | git, docker, node, gcc, etc. |
+| **12** | Packages | brew, apt, pip, npm counts |
+| **13** | Services | Running daemons & services |
+
+</td>
+<td width="50%" valign="top">
+
+### `bench.py` — Performance Scoring
+
+Runs **22 isolated benchmarks** across 5 categories:
+
+| | Category | Wt. | Tests |
+|---|----------|-----|-------|
+| **1** | CPU Single | 25% | Prime sieve, Mandelbrot, matrix, compression, sort |
+| **2** | CPU Multi | 25% | Parallel matrix, parallel compute, hash, sort |
+| **3** | GPU | 20% | Matrix multiply, elementwise, reduction, batch matmul |
+| **4** | Memory | 15% | Sequential R/W, random access, copy |
+| **5** | Storage | 15% | Sequential R/W, random R/W |
+
+**Scoring:** `10.0 = baseline` · Weighted geometric mean
+
+**Isolation:** Each test runs in its own subprocess
+
+**Safety:** Pre-flight checks, cooldowns, retry with backoff
+
+</td>
+</tr>
+</table>
+
+<br/>
+
+## **Quick Start**
 
 ```bash
-# Clone the repository
 git clone https://github.com/mohamed-elkholy95/bench_py.git
 cd bench_py
+```
 
-# Run system fetch (zero required dependencies)
+<table>
+<tr>
+<td width="50%">
+
+**System Discovery** _(zero dependencies)_
+
+```bash
 python fetch.py
+```
 
-# Install benchmark dependencies
+</td>
+<td width="50%">
+
+**Performance Benchmark** _(requires numpy)_
+
+```bash
 pip install numpy
-
-# Run full benchmark suite
 python bench.py
 ```
 
----
+</td>
+</tr>
+</table>
 
-## Requirements
+<br/>
 
-| Tool | Required | Notes |
-|------|----------|-------|
-| **Python 3.10+** | Yes | Uses dataclasses, type hints, `match` patterns |
-| **numpy** | `bench.py` only | Core benchmark computations |
-| **psutil** | Optional | Enables CPU temps, battery, RAM details, cooldown monitoring |
-| **mlx** | Optional | Apple Silicon GPU benchmarks (skipped if unavailable) |
+## **Installation**
+
+<table>
+<tr>
+<td>
+
+![Python](https://img.shields.io/badge/Python_3.10+-required-3776AB?style=flat-square&logo=python&logoColor=white)
+
+</td>
+<td>Core runtime — dataclasses, type hints, subprocess isolation</td>
+</tr>
+<tr>
+<td>
+
+![NumPy](https://img.shields.io/badge/numpy-bench.py_only-013243?style=flat-square&logo=numpy&logoColor=white)
+
+</td>
+<td>Matrix operations, memory bandwidth, parallel compute benchmarks</td>
+</tr>
+<tr>
+<td>
+
+![psutil](https://img.shields.io/badge/psutil-optional-4B8BBE?style=flat-square&logo=python&logoColor=white)
+
+</td>
+<td>CPU temps, battery info, RAM details, cooldown monitoring</td>
+</tr>
+<tr>
+<td>
+
+![MLX](https://img.shields.io/badge/mlx-optional_(Apple_Silicon)-000000?style=flat-square&logo=apple&logoColor=white)
+
+</td>
+<td>GPU compute benchmarks on Apple Silicon (gracefully skipped otherwise)</td>
+</tr>
+</table>
 
 ```bash
-# Install all optional dependencies
+# Everything at once
 pip install numpy psutil mlx
 ```
 
----
+<br/>
 
-## Usage
+## **Usage**
 
-### System Fetch
+<details>
+<summary><b>fetch.py</b> — All flags</summary>
 
-```bash
-# Full scan — colored terminal output + JSON + text files
-python fetch.py
+<br/>
 
-# JSON only (pipe to jq, store in CI, etc.)
-python fetch.py --json-only
-
-# Verbose logging for debugging
-python fetch.py --verbose
-
-# Disable ANSI colors
-python fetch.py --no-color
-
-# Custom timeout per collector (default: 15s)
-python fetch.py --timeout 30
-
-# Save output files to a specific directory
-python fetch.py --output-dir /tmp/reports
-```
-
-**Output files:**
-- `system_report.json` — machine-readable full report
-- `system_report.txt` — plain-text version of the terminal output
-
-### System Benchmark
+| Flag | Description |
+|------|-------------|
+| `--json-only` | JSON output only — pipe to `jq`, store in CI |
+| `--verbose` / `-v` | Debug logging with full tracebacks |
+| `--no-color` | Disable ANSI color codes |
+| `--timeout N` | Per-collector timeout in seconds (default: 15) |
+| `--output-dir PATH` | Directory for output files |
 
 ```bash
-# Full benchmark — all categories
-python bench.py
-
-# Quick mode — reduced iterations for a fast preview
-python bench.py --quick
-
-# JSON output only
-python bench.py --json-only
-
-# Skip specific categories
-python bench.py --skip gpu storage
-
-# Run only specific categories
-python bench.py --only cpu_single memory
-
-# Calibration mode — print raw values for baseline tuning
-python bench.py --calibrate
-
-# Custom iterations and warmups
-python bench.py --iterations 10 --warmups 5
-
-# Skip cooldown between phases
-python bench.py --no-cooldown
-
-# Save to a specific directory
-python bench.py --output-dir ./results
+python fetch.py                          # Full scan, colored terminal + files
+python fetch.py --json-only              # JSON to stdout
+python fetch.py --json-only | jq '.cpu'  # Pipe to jq
+python fetch.py --verbose --timeout 30   # Debug mode, longer timeouts
+python fetch.py --output-dir /tmp        # Save reports elsewhere
 ```
 
-**Output files:**
-- `benchmark_report.json` — full results with per-test scores, timings, and metadata
-- `benchmark_report.txt` — plain-text summary
+**Output:** `system_report.json` + `system_report.txt`
 
----
+</details>
 
-## Sample Output
+<details>
+<summary><b>bench.py</b> — All flags</summary>
 
-### System Fetch
+<br/>
+
+| Flag | Description |
+|------|-------------|
+| `--quick` | Reduced iterations for fast preview |
+| `--json-only` | JSON output only |
+| `--skip CATEGORY [...]` | Skip categories (e.g. `gpu storage`) |
+| `--only CATEGORY [...]` | Run only listed categories |
+| `--calibrate` | Print raw values for baseline tuning |
+| `--iterations N` | Measurement iterations (default: 5) |
+| `--warmups N` | Warmup iterations (default: 3) |
+| `--test-timeout N` | Per-test timeout in seconds (default: 30) |
+| `--no-cooldown` | Skip cooldown waits between phases |
+| `--no-color` | Disable ANSI color codes |
+| `--verbose` / `-v` | Debug logging |
+| `--output-dir PATH` | Directory for output files |
+
+```bash
+python bench.py                          # Full benchmark suite
+python bench.py --quick                  # Fast preview
+python bench.py --skip gpu               # Skip GPU tests
+python bench.py --only cpu_single memory # Run specific categories
+python bench.py --calibrate              # Baseline calibration mode
+python bench.py --iterations 10          # More precise measurements
+python bench.py --output-dir ./results   # Save reports elsewhere
+```
+
+**Output:** `benchmark_report.json` + `benchmark_report.txt`
+
+</details>
+
+<br/>
+
+## **Sample Output**
+
+<details open>
+<summary><b>fetch.py</b> — System Report</summary>
 
 ```
                       System Report
@@ -180,7 +263,10 @@ Completed in 1.2s -- 15 succeeded, 0 failed
 ══════════════════════════════════════════════════════════
 ```
 
-### System Benchmark
+</details>
+
+<details open>
+<summary><b>bench.py</b> — Benchmark Report</summary>
 
 ```
 ============================================================
@@ -190,32 +276,37 @@ Completed in 1.2s -- 15 succeeded, 0 failed
   Duration  : 87.3s
   Baseline  : Apple M4 Max / 36GB / macOS 26.4
 ------------------------------------------------------------
+
   CPU Single-Core  (10.0)
-    prime_sieve              10.0  679.7 ops/s
-    mandelbrot               10.0  706.8 Kpx/s
-    matrix_1t                10.0  790.0 GFLOPS
-    compression              10.0  145.2 MB/s
-    sort                     10.0  6.7 Melem/s
+    prime_sieve              10.0   679.7 ops/s
+    mandelbrot               10.0   706.8 Kpx/s
+    matrix_1t                10.0   790.0 GFLOPS
+    compression              10.0   145.2 MB/s
+    sort                     10.0   6.7 Melem/s
 
   CPU Multi-Core  (10.0)
-    matrix_full              10.0  738.1 GFLOPS
-    parallel_compute         10.0  2.5 Mpx/s
-    hash_throughput          10.0  488.4 MB/s
-    parallel_sort            10.0  20.9 Melem/s
+    matrix_full              10.0   738.1 GFLOPS
+    parallel_compute         10.0   2.5 Mpx/s
+    hash_throughput          10.0   488.4 MB/s
+    parallel_sort            10.0   20.9 Melem/s
 
   GPU Compute  (10.0)
-    gpu_matrix               10.0  10.6 TFLOPS
-    gpu_elementwise          10.0  124.0 GB/s
-    gpu_reduction            10.0  341.7 GB/s
-    gpu_batch_matmul         10.0  9.2 TFLOPS
+    gpu_matrix               10.0   10.6 TFLOPS
+    gpu_elementwise          10.0   124.0 GB/s
+    gpu_reduction            10.0   341.7 GB/s
+    gpu_batch_matmul         10.0   9.2 TFLOPS
 
   Memory  (10.0)
-    mem_seq_read             10.0  69.3 GB/s
-    ...
+    mem_seq_read             10.0   69.3 GB/s
+    mem_seq_write            10.0   52.1 GB/s
+    mem_random_access        10.0   0.3 Gops/s
+    mem_copy                 10.0   58.7 GB/s
 
   Storage I/O  (10.0)
-    disk_seq_write           10.0  ...
-    ...
+    disk_seq_write           10.0   4.8 GB/s
+    disk_seq_read            10.0   5.2 GB/s
+    disk_random_write        10.0   62.4 Kops/s
+    disk_random_read         10.0   71.8 Kops/s
 
 ------------------------------------------------------------
   OVERALL SCORE : 10.0  /10
@@ -228,106 +319,165 @@ Completed in 1.2s -- 15 succeeded, 0 failed
 ============================================================
 ```
 
----
+</details>
 
-## Architecture
+<br/>
+
+## **Scoring System**
+
+<table>
+<tr>
+<td align="center"><h3>< 10.0</h3><b>Below Baseline</b></td>
+<td align="center"><h3>= 10.0</h3><b>Matches Baseline</b></td>
+<td align="center"><h3>> 10.0</h3><b>Above Baseline</b></td>
+</tr>
+</table>
+
+The benchmark normalizes every raw measurement against reference values from a baseline machine (**Apple M4 Max / 36GB / macOS**).
+
+- **Per-test scores** are computed as `(raw_value / baseline_value) * 10.0`
+- **Category scores** use the **geometric mean** of individual test scores
+- **Overall score** is a **weighted geometric mean** across categories
+- When categories are skipped, weights are **redistributed proportionally** among active categories
+
+<br/>
+
+## **Architecture**
 
 ```
-python_info/
-├── fetch.py           # System information collector
-├── bench.py           # Benchmark suite
-├── test_fetch.py      # Tests for fetch.py
-├── test_bench.py      # Tests for bench.py
-└── docs/              # Design specs and implementation plans
+bench_py/
+├── fetch.py           System discovery — 15 collectors, 3 output formats
+├── bench.py           Benchmark suite — 22 tests, 5 categories, scoring engine
+├── test_fetch.py      Unit tests for fetch.py
+├── test_bench.py      Unit tests for bench.py
+└── docs/              Design specifications and implementation plans
 ```
 
-### How Fetch Works
+<details>
+<summary><b>How <code>fetch.py</code> works</b></summary>
 
-1. **OS Detection** — identifies macOS, Linux, or Windows
-2. **CommandRunner** — executes shell commands with timeout, cleanup, and graceful shutdown
-3. **Collectors** — 15 independent collectors run sequentially, each wrapped in `safe_collect()` for fault isolation
-4. **Error Handling** — failures are classified (timeout, permission denied, command not found, parse error) with actionable suggestions
-5. **Output** — colored terminal display, JSON, and plain text — all generated from a single `SystemReport` dataclass
+<br/>
 
-### How Bench Works
+```
+┌─────────────┐     ┌───────────────┐     ┌────────────────┐
+│  OS Detect   │────>│ CommandRunner  │────>│  15 Collectors  │
+│ macOS/Linux/ │     │ timeout+retry  │     │  (fault-isolated│
+│   Windows    │     │   +cleanup     │     │   via safe_     │
+└─────────────┘     └───────────────┘     │   collect)      │
+                                           └───────┬────────┘
+                                                   │
+                              ┌─────────────────────┼─────────────────────┐
+                              ▼                     ▼                     ▼
+                    ┌──────────────┐     ┌───────────────┐     ┌──────────────┐
+                    │   Terminal    │     │     JSON      │     │  Plain Text  │
+                    │ (ANSI color) │     │  (structured) │     │  (no ANSI)   │
+                    └──────────────┘     └───────────────┘     └──────────────┘
+```
 
-1. **Pre-flight Checks** — `SystemProbe` verifies RAM, CPU load, thermal state, battery, and disk space
-2. **Phased Execution** — benchmarks run in ordered phases (CPU single → CPU multi → GPU → Memory → Storage) with cooldown periods between phases
-3. **Subprocess Isolation** — each benchmark runs in a separate `multiprocessing.Process` to prevent crashes from affecting other tests
-4. **Retry Policy** — transient failures (timeouts, crashes) are retried up to 2 times with backoff; permanent failures (missing dependencies, permissions) fail immediately
-5. **Scoring** — raw measurements are normalized against baseline values; category scores use geometric mean; overall score uses weighted geometric mean
-6. **Resource Monitoring** — `ResourceGuard` samples CPU and RAM usage at 500ms intervals during each test
-7. **Cooldown Management** — `CooldownManager` waits between phases until CPU usage drops below threshold, ensuring consistent results
+1. **OS Detection** — identifies macOS, Linux, or Windows via `platform.system()`
+2. **CommandRunner** — executes shell commands with per-command timeout, process tracking, and graceful shutdown
+3. **15 Collectors** — each wrapped in `safe_collect()` for fault isolation; failures are classified with actionable suggestions
+4. **Error Classification** — `timeout`, `permission_denied`, `command_not_found`, `parse_error`, `not_supported`
+5. **Signal Handling** — `SIGINT`/`SIGTERM` trigger graceful shutdown; partial results are preserved
 
-### Signal Handling
+</details>
 
-Both tools handle `SIGINT` and `SIGTERM` gracefully — active processes are terminated, partial results are preserved, and output files are written with whatever data was collected.
+<details>
+<summary><b>How <code>bench.py</code> works</b></summary>
 
----
+<br/>
 
-## Scoring System
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────────────────────────┐
+│  SystemProbe  │────>│  Orchestrator │────>│         Phased Execution         │
+│  (pre-flight) │     │  (cooldowns)  │     │                                  │
+│  RAM / CPU /  │     │               │     │  Phase 1: CPU Single ─> cooldown │
+│  thermal /    │     │               │     │  Phase 2: CPU Multi  ─> cooldown │
+│  battery      │     │               │     │  Phase 3: GPU        ─> cooldown │
+└──────────────┘     └──────────────┘     │  Phase 4: Memory     ─> cooldown │
+                                           │  Phase 5: Storage                │
+                                           └────────────┬─────────────────────┘
+                                                        │
+                              ┌──────────────────────────┼───────────────────┐
+                              ▼                          ▼                   ▼
+                    ┌──────────────────┐     ┌────────────────┐    ┌──────────────┐
+                    │  TestExecutor     │     │ Scoring Engine  │    │ ResourceGuard │
+                    │  (subprocess      │     │ normalize ─>    │    │ (CPU/RAM      │
+                    │   isolation +     │     │ geo mean ─>     │    │  sampling     │
+                    │   retry policy)   │     │ weighted score  │    │  @500ms)      │
+                    └──────────────────┘     └────────────────┘    └──────────────┘
+```
 
-The benchmark uses a **relative scoring model** where **10.0 = baseline machine performance**.
+1. **Pre-flight** — `SystemProbe` checks RAM, CPU load, thermal state, battery, disk space
+2. **Phased Execution** — ordered phases with `CooldownManager` between each
+3. **Subprocess Isolation** — each benchmark runs in `multiprocessing.Process`
+4. **Retry Policy** — transient failures retried 2x with backoff; permanent failures fail immediately
+5. **Scoring Engine** — raw values normalized against baseline; geometric mean per category; weighted overall
+6. **Resource Monitoring** — `ResourceGuard` daemon thread samples CPU/RAM at 500ms intervals
 
-- **> 10.0** — faster than baseline
-- **= 10.0** — matches baseline
-- **< 10.0** — slower than baseline
+</details>
 
-The baseline is calibrated against an **Apple M4 Max / 36GB / macOS** configuration. Category scores are computed using the geometric mean of individual test scores. The overall score is a weighted geometric mean across categories, with weights redistributed proportionally when categories are skipped.
+<br/>
 
----
+## **Cross-Platform Support**
 
-## Testing
+|  | macOS | Linux | Windows |
+|--|-------|-------|---------|
+| OS info | **Full** | **Full** | **Full** |
+| CPU | **Full** | **Full** | **Full** |
+| Memory type/speed | **Full** | **Full** | Partial |
+| GPU detection | **Full** (Metal/MLX) | Via `lspci` | Via `wmic` |
+| Storage | **Full** | **Full** | **Full** |
+| Network | **Full** | **Full** | **Full** |
+| Battery | **Full** | **Full** | **Full** |
+| Displays | **Full** | Via `xrandr` | Via `wmic` |
+| Bluetooth | **Full** | Via `bluetoothctl` | Partial |
+| Sensors | Via `psutil` | Via `psutil` | Via `psutil` |
+| GPU Benchmarks | **MLX** (Apple Silicon) | _Skipped_ | _Skipped_ |
+
+<br/>
+
+## **Testing**
 
 ```bash
-# Run all tests
-pytest
-
-# Run with verbose output
-pytest -v
-
-# Run specific test file
-pytest test_fetch.py
-pytest test_bench.py
+pytest              # Run all tests
+pytest -v           # Verbose output
+pytest test_fetch.py  # Fetch tests only
+pytest test_bench.py  # Benchmark tests only
 ```
 
----
+<br/>
 
-## Cross-Platform Support
+## **Contributing**
 
-| Feature | macOS | Linux | Windows |
-|---------|-------|-------|---------|
-| OS info | Full | Full | Full |
-| CPU details | Full | Full | Full |
-| Memory type/speed | Full | Full | Partial |
-| GPU detection | Full (Metal/MLX) | Via lspci | Via wmic |
-| Storage | Full | Full | Full |
-| Network | Full | Full | Full |
-| Battery | Full | Full | Full |
-| Displays | Full | Via xrandr | Via wmic |
-| Bluetooth | Full | Via bluetoothctl | Partial |
-| Sensors | Via psutil | Via psutil | Via psutil |
-| GPU Benchmarks | MLX (Apple Silicon) | Skipped | Skipped |
+Contributions are welcome. Please open an issue to discuss changes before submitting a PR.
 
----
+1. **Fork** the repository
+2. **Branch** — `git checkout -b feature/my-change`
+3. **Test** — `pytest`
+4. **PR** — submit with a clear description
 
-## Contributing
+<br/>
 
-Contributions are welcome. Please open an issue first to discuss what you'd like to change.
+## **Author**
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-change`)
-3. Run tests (`pytest`)
-4. Submit a pull request
+<a href="https://github.com/mohamed-elkholy95">
+  <img src="https://img.shields.io/badge/Mohamed_Elkholy-181717?style=for-the-badge&logo=github&logoColor=white" />
+</a>
+
+<br/>
+<br/>
+
+## **License**
+
+Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for details.
 
 ---
 
-## Author
+<div align="center">
 
-**Mohamed Elkholy** — [@mohamed-elkholy95](https://github.com/mohamed-elkholy95)
+<sub>If you find Bench_py useful, consider giving it a star.</sub>
 
----
+[![Star](https://img.shields.io/github/stars/mohamed-elkholy95/bench_py?style=social)](https://github.com/mohamed-elkholy95/bench_py)
 
-## License
-
-MIT
+</div>
