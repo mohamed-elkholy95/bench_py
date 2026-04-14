@@ -470,3 +470,52 @@ def test_bench_disk_random_read():
         with open(path, "wb") as f:
             f.write(os.urandom(1024 * 1024))
         assert bench_disk_random_read(path, 100) > 0
+
+
+# ---------------------------------------------------------------------------
+# Task 11: Registry, Phases, Baseline, safe_benchmark
+# ---------------------------------------------------------------------------
+
+def test_benchmark_registry_has_21_tests():
+    from bench import BENCHMARKS
+    assert len(BENCHMARKS) == 21
+
+
+def test_benchmark_registry_categories():
+    from bench import BENCHMARKS
+    categories = set(b[1] for b in BENCHMARKS)
+    assert categories == {"cpu_single", "cpu_multi", "gpu", "memory", "storage"}
+
+
+def test_safe_benchmark_success():
+    from bench import safe_benchmark, BenchConfig, BenchmarkResult
+    config = BenchConfig(iterations=2, warmups=1, test_timeout=10, timeout=30)
+    def _trivial(size: int) -> float:
+        return 42.0
+    result, error = safe_benchmark("test_trivial", "cpu_single", _trivial, (100,), "ops/sec", 42.0, config)
+    assert result is not None
+    assert error is None
+    assert isinstance(result, BenchmarkResult)
+    assert result.score > 0
+
+
+def test_safe_benchmark_failure():
+    from bench import safe_benchmark, BenchConfig, BenchmarkError
+    config = BenchConfig(iterations=2, warmups=1, test_timeout=5, timeout=15)
+    def _failing(size: int) -> float:
+        raise NotImplementedError("nope")
+    result, error = safe_benchmark("test_fail", "cpu_single", _failing, (100,), "ops/sec", 1.0, config)
+    assert result is None
+    assert isinstance(error, BenchmarkError)
+    assert error.error_type == "not_supported"
+
+
+def test_phase_enum_order():
+    from bench import Phase, PHASE_ORDER
+    assert PHASE_ORDER[0] == Phase.WARMUP
+    assert Phase.FINALIZE == PHASE_ORDER[-1]
+
+
+def test_category_weights_sum_to_one():
+    from bench import CATEGORY_WEIGHTS
+    assert abs(sum(CATEGORY_WEIGHTS.values()) - 1.0) < 0.001

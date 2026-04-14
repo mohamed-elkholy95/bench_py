@@ -988,3 +988,236 @@ def bench_disk_random_read(path: str, ops: int = 1000) -> float:
             f.read(block_size)
         elapsed = time.monotonic() - start
     return ops / elapsed
+
+
+# ---------------------------------------------------------------------------
+# Task 11: Registry, Phases, Baseline, safe_benchmark
+# ---------------------------------------------------------------------------
+
+BENCHMARKS: List[Tuple[str, str, Callable, int, str]] = [
+    # CPU Single-Core
+    ("prime_sieve",       "cpu_single", bench_prime_sieve,       1_000_000,   "ops/sec"),
+    ("mandelbrot",        "cpu_single", bench_mandelbrot,        1024,        "pixels/sec"),
+    ("matrix_1t",         "cpu_single", bench_matrix_single,     1024,        "GFLOPS"),
+    ("compression",       "cpu_single", bench_compression,       10,          "MB/s"),
+    ("sort",              "cpu_single", bench_sort,              10_000_000,  "M_elements/sec"),
+    # CPU Multi-Core
+    ("matrix_full",       "cpu_multi",  bench_matrix_multi,      4096,        "GFLOPS"),
+    ("parallel_compute",  "cpu_multi",  bench_parallel_compute,  1024,        "pixels/sec"),
+    ("hash_throughput",   "cpu_multi",  bench_hash_throughput,   100,         "MB/s"),
+    ("parallel_sort",     "cpu_multi",  bench_parallel_sort,     10_000_000,  "M_elements/sec"),
+    # GPU
+    ("gpu_matrix",        "gpu",        bench_gpu_matrix,        4096,        "GFLOPS"),
+    ("gpu_elementwise",   "gpu",        bench_gpu_elementwise,   32_000_000,  "GB/s"),
+    ("gpu_reduction",     "gpu",        bench_gpu_reduction,     64_000_000,  "GB/s"),
+    ("gpu_batch_matmul",  "gpu",        bench_gpu_batch_matmul,  64,          "GFLOPS"),
+    # Memory
+    ("mem_seq_read",      "memory",     bench_mem_seq_read,      256,         "GB/s"),
+    ("mem_seq_write",     "memory",     bench_mem_seq_write,     256,         "GB/s"),
+    ("mem_random_access", "memory",     bench_mem_random_access, 256,         "M_accesses/sec"),
+    ("mem_copy",          "memory",     bench_mem_copy,          256,         "GB/s"),
+    # Storage
+    ("disk_seq_write",    "storage",    bench_disk_seq_write,    256,         "MB/s"),
+    ("disk_seq_read",     "storage",    bench_disk_seq_read,     0,           "MB/s"),
+    ("disk_random_write", "storage",    bench_disk_random_write, 1000,        "IOPS"),
+    ("disk_random_read",  "storage",    bench_disk_random_read,  1000,        "IOPS"),
+]
+
+CATEGORY_WEIGHTS: Dict[str, float] = {
+    "cpu_single": 0.25,
+    "cpu_multi":  0.25,
+    "gpu":        0.20,
+    "memory":     0.15,
+    "storage":    0.15,
+}
+
+# Reduced sizes for --quick mode
+QUICK_SIZES: Dict[str, int] = {
+    "prime_sieve":       10_000,
+    "mandelbrot":        64,
+    "matrix_1t":         128,
+    "compression":       1,
+    "sort":              100_000,
+    "matrix_full":       256,
+    "parallel_compute":  128,
+    "hash_throughput":   1,
+    "parallel_sort":     100_000,
+    "gpu_matrix":        512,
+    "gpu_elementwise":   1_000_000,
+    "gpu_reduction":     2_000_000,
+    "gpu_batch_matmul":  4,
+    "mem_seq_read":      8,
+    "mem_seq_write":     8,
+    "mem_random_access": 8,
+    "mem_copy":          8,
+    "disk_seq_write":    8,
+    "disk_seq_read":     0,
+    "disk_random_write": 50,
+    "disk_random_read":  50,
+}
+
+
+class Phase(Enum):
+    WARMUP     = "warmup"
+    CPU_SINGLE = "cpu_single"
+    COOLDOWN_1 = "cooldown_1"
+    CPU_MULTI  = "cpu_multi"
+    COOLDOWN_2 = "cooldown_2"
+    MEMORY     = "memory"
+    GPU        = "gpu"
+    STORAGE    = "storage"
+    FINALIZE   = "finalize"
+
+
+PHASE_ORDER = [
+    Phase.WARMUP,
+    Phase.CPU_SINGLE,
+    Phase.COOLDOWN_1,
+    Phase.CPU_MULTI,
+    Phase.COOLDOWN_2,
+    Phase.MEMORY,
+    Phase.GPU,
+    Phase.STORAGE,
+    Phase.FINALIZE,
+]
+
+PHASE_TO_CATEGORY: Dict[Phase, str] = {
+    Phase.CPU_SINGLE: "cpu_single",
+    Phase.CPU_MULTI:  "cpu_multi",
+    Phase.GPU:        "gpu",
+    Phase.MEMORY:     "memory",
+    Phase.STORAGE:    "storage",
+}
+
+BASELINE_MACHINE = "Apple M4 Max / 36GB / macOS 26.4"
+BASELINE_VERSION = "1.0"
+BASELINE: Dict[str, float] = {
+    "cpu_single_prime_sieve":       1.0,
+    "cpu_single_mandelbrot":        1.0,
+    "cpu_single_matrix_1t":         1.0,
+    "cpu_single_compression":       1.0,
+    "cpu_single_sort":              1.0,
+    "cpu_multi_matrix_full":        1.0,
+    "cpu_multi_parallel_compute":   1.0,
+    "cpu_multi_hash_throughput":    1.0,
+    "cpu_multi_parallel_sort":      1.0,
+    "gpu_gpu_matrix":               1.0,
+    "gpu_gpu_elementwise":          1.0,
+    "gpu_gpu_reduction":            1.0,
+    "gpu_gpu_batch_matmul":         1.0,
+    "memory_mem_seq_read":          1.0,
+    "memory_mem_seq_write":         1.0,
+    "memory_mem_random_access":     1.0,
+    "memory_mem_copy":              1.0,
+    "storage_disk_seq_write":       1.0,
+    "storage_disk_seq_read":        1.0,
+    "storage_disk_random_write":    1.0,
+    "storage_disk_random_read":     1.0,
+}
+
+
+def _suggest_bench_fix(name: str, exc: Exception) -> str:
+    """Return a human-readable suggestion for a benchmark failure."""
+    _suggestions: Dict[str, str] = {
+        "gpu_matrix":       "Install mlx: pip install mlx",
+        "gpu_elementwise":  "Install mlx: pip install mlx",
+        "gpu_reduction":    "Install mlx: pip install mlx",
+        "gpu_batch_matmul": "Install mlx: pip install mlx",
+        "matrix_1t":        "Install numpy: pip install numpy",
+        "matrix_full":      "Install numpy: pip install numpy",
+        "mem_seq_read":     "Install numpy: pip install numpy",
+        "mem_seq_write":    "Install numpy: pip install numpy",
+        "mem_random_access":"Install numpy: pip install numpy",
+        "mem_copy":         "Install numpy: pip install numpy",
+    }
+    if isinstance(exc, ImportError):
+        return _suggestions.get(name, f"Install missing dependency: {exc}")
+    if isinstance(exc, NotImplementedError):
+        return f"Test '{name}' not supported on this platform."
+    if isinstance(exc, PermissionError):
+        return f"Check filesystem permissions for '{name}'."
+    if isinstance(exc, MemoryError):
+        return "Reduce benchmark size or free system memory."
+    if isinstance(exc, (TestTimeout,)):
+        return "Increase --test-timeout or use --quick mode."
+    return f"Unexpected error in '{name}': {exc}"
+
+
+def safe_benchmark(
+    name: str,
+    category: str,
+    fn: Callable,
+    args: tuple,
+    unit: str,
+    baseline_value: float,
+    config: "BenchConfig",
+) -> Tuple[Optional[BenchmarkResult], Optional[BenchmarkError]]:
+    """Run a single benchmark safely with retry logic. Never raises."""
+    retry_policy = RetryPolicy()
+    retries_attempted = 0
+
+    # Warmup iterations (direct call, discard result)
+    for _ in range(config.warmups):
+        try:
+            fn(*args)
+        except Exception:
+            pass  # Warmup failures are silently ignored
+
+    last_exc: Optional[Exception] = None
+
+    while True:
+        times: List[float] = []
+        raw_values: List[float] = []
+        iteration_error: Optional[Exception] = None
+
+        try:
+            for _ in range(config.iterations):
+                t0 = time.monotonic()
+                raw = fn(*args)
+                elapsed = time.monotonic() - t0
+                times.append(elapsed)
+                raw_values.append(float(raw))
+        except Exception as exc:
+            iteration_error = exc
+
+        if iteration_error is None:
+            # All iterations succeeded
+            median_raw = compute_median(raw_values)
+            median_time = compute_median(times)
+            std_dev = statistics.stdev(times) if len(times) > 1 else 0.0
+            score = compute_test_score(median_raw, baseline_value)
+            return BenchmarkResult(
+                name=name,
+                category=category,
+                raw_value=median_raw,
+                unit=unit,
+                score=score,
+                iterations=len(times),
+                warmups=config.warmups,
+                median_time=median_time,
+                std_dev=std_dev,
+                times=times,
+            ), None
+
+        last_exc = iteration_error
+
+        if retry_policy.should_retry(last_exc) and retries_attempted < retry_policy.max_retries:
+            retries_attempted += 1
+            gc.collect()
+            time.sleep(retry_policy.backoff_seconds)
+            continue
+
+        # Permanent failure or retries exhausted
+        break
+
+    # Build error result
+    error_type = classify_bench_error(last_exc)
+    suggestion = _suggest_bench_fix(name, last_exc)
+    return None, BenchmarkError(
+        test=name,
+        category=category,
+        error_type=error_type,
+        message=str(last_exc),
+        suggestion=suggestion,
+        retries_attempted=retries_attempted,
+    )
