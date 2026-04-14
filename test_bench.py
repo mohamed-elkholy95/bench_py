@@ -543,3 +543,69 @@ def test_orchestrator_skip_all():
     orch = BenchmarkOrchestrator(config, system_info={})
     report = orch.run()
     assert report.overall_score == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Task 13: Output formatters
+# ---------------------------------------------------------------------------
+
+def _make_sample_report():
+    from bench import (
+        BenchmarkReport, CategoryScore, BenchmarkResult,
+        ReportIntegrity, ExecutionMetadata,
+    )
+    result = BenchmarkResult(
+        name="prime_sieve", category="cpu_single", raw_value=1.0,
+        unit="ops/sec", score=1000.0, iterations=2, warmups=0,
+        median_time=0.001, std_dev=0.0, times=[0.001, 0.001],
+    )
+    cat = CategoryScore(name="cpu_single", score=1000.0, weight=0.25, tests=[result])
+    integrity = ReportIntegrity(
+        complete=True, degraded_tests=[], cpu_fallback_tests=[],
+        retried_tests=[], partial=False, constrained=False,
+    )
+    execution = ExecutionMetadata(
+        phases_completed=5, phases_total=5, total_cooldown_seconds=0.0,
+        peak_cpu_temp_c=None, peak_ram_usage_mb=0.0,
+        pre_flight={}, execution_mode="quick",
+    )
+    return BenchmarkReport(
+        overall_score=1000.0, categories=[cat],
+        baseline_machine="Test Machine", baseline_version="1.0",
+        system=None, skipped=[], errors=[],
+        integrity=integrity, execution=execution,
+        duration_seconds=1.0, timestamp="2026-04-13T00:00:00Z",
+    )
+
+
+def test_format_terminal_produces_output():
+    from bench import format_terminal
+    output = format_terminal(_make_sample_report(), use_color=False)
+    assert "OVERALL SCORE" in output
+    assert "1000" in output
+
+
+def test_format_terminal_no_ansi():
+    from bench import format_terminal
+    output = format_terminal(_make_sample_report(), use_color=False)
+    assert "\033[" not in output
+
+
+def test_format_json_valid():
+    from bench import format_json
+    result = format_json(_make_sample_report())
+    parsed = json.loads(result)
+    assert parsed["overall_score"] == 1000.0
+
+
+def test_format_text_no_ansi():
+    from bench import format_text
+    assert "\033[" not in format_text(_make_sample_report())
+
+
+def test_save_outputs_creates_files():
+    from bench import save_outputs
+    with tempfile.TemporaryDirectory() as tmpdir:
+        json_path, text_path = save_outputs(_make_sample_report(), output_dir=tmpdir)
+        assert os.path.exists(json_path)
+        assert text_path and os.path.exists(text_path)

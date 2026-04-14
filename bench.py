@@ -1482,3 +1482,121 @@ class BenchmarkOrchestrator:
             duration_seconds=round(duration, 3),
             timestamp=timestamp,
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 13: Output Formatters
+# ---------------------------------------------------------------------------
+
+class _Color:
+    """ANSI color helper. Same pattern as fetch.py."""
+
+    def __init__(self, enabled: bool = True) -> None:
+        self._enabled = enabled
+
+    def _wrap(self, code: str, text: str) -> str:
+        if not self._enabled:
+            return text
+        return f"\033[{code}m{text}\033[0m"
+
+    def green(self, t: str) -> str:  return self._wrap("32", t)
+    def yellow(self, t: str) -> str: return self._wrap("33", t)
+    def red(self, t: str) -> str:    return self._wrap("31", t)
+    def dim(self, t: str) -> str:    return self._wrap("2", t)
+    def bold(self, t: str) -> str:   return self._wrap("1", t)
+    def cyan(self, t: str) -> str:   return self._wrap("36", t)
+
+
+def _score_color(c: _Color, score: float) -> str:
+    """Color a score based on its value."""
+    if score >= 1000:
+        return c.green(f"{score:.0f}")
+    if score >= 800:
+        return c.yellow(f"{score:.0f}")
+    return c.red(f"{score:.0f}")
+
+
+def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
+    """Render a human-readable benchmark report with optional ANSI color."""
+    c = _Color(use_color)
+    lines: List[str] = []
+
+    # Header
+    lines.append(c.bold("=" * 60))
+    lines.append(c.bold("  SYSTEM BENCHMARK REPORT"))
+    lines.append(c.bold("=" * 60))
+    lines.append(f"  Timestamp : {report.timestamp}")
+    lines.append(f"  Duration  : {report.duration_seconds:.1f}s")
+    lines.append(f"  Baseline  : {report.baseline_machine}")
+    lines.append(c.bold("-" * 60))
+
+    # Per-category results
+    for cat in report.categories:
+        display = _CATEGORY_DISPLAY.get(cat.name, cat.name)
+        if cat.skipped:
+            lines.append(f"  {c.dim(display):<30} {c.dim('(skipped)')}")
+            continue
+        lines.append(c.bold(f"  {display}"))
+        for test in cat.tests:
+            score_str = _score_color(c, test.score)
+            lines.append(
+                f"    {test.name:<28} {test.raw_value:>10.2f} {test.unit:<18} score: {score_str}"
+            )
+        cat_score_str = _score_color(c, cat.score)
+        lines.append(f"  {'Category Score':<30} {cat_score_str}")
+        lines.append("")
+
+    # Overall score
+    lines.append(c.bold("=" * 60))
+    overall_str = _score_color(c, report.overall_score)
+    lines.append(c.bold(f"  OVERALL SCORE : {overall_str}"))
+    lines.append(c.bold("=" * 60))
+
+    # Errors
+    if report.errors:
+        lines.append("")
+        lines.append(c.yellow(f"  Errors ({len(report.errors)}):"))
+        for err in report.errors:
+            lines.append(c.red(f"    [{err.error_type}] {err.test}: {err.message}"))
+            lines.append(c.dim(f"      -> {err.suggestion}"))
+
+    # Footer
+    lines.append("")
+    lines.append(c.dim(f"  Baseline version: {report.baseline_version}"))
+    if report.integrity and not report.integrity.complete:
+        lines.append(c.yellow("  WARNING: Benchmark run was interrupted."))
+
+    return "\n".join(lines)
+
+
+def format_json(report: BenchmarkReport) -> str:
+    """Serialize a BenchmarkReport to a JSON string."""
+    return json.dumps(report_to_dict(report), indent=2, ensure_ascii=False)
+
+
+def format_text(report: BenchmarkReport) -> str:
+    """Plain-text version (no ANSI codes) of the terminal report."""
+    return format_terminal(report, use_color=False)
+
+
+def save_outputs(
+    report: BenchmarkReport,
+    output_dir: str = ".",
+    json_only: bool = False,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Write benchmark_report.json and optionally benchmark_report.txt."""
+    os.makedirs(output_dir, exist_ok=True)
+    json_path = os.path.join(output_dir, "benchmark_report.json")
+    text_path: Optional[str] = None
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        f.write(format_json(report))
+        f.write("\n")
+
+    if not json_only:
+        text_path = os.path.join(output_dir, "benchmark_report.txt")
+        with open(text_path, "w", encoding="utf-8") as f:
+            f.write(format_text(report))
+            f.write("\n")
+
+    return json_path, text_path
