@@ -1092,27 +1092,27 @@ PHASE_TO_CATEGORY: Dict[Phase, str] = {
 BASELINE_MACHINE = "Apple M4 Max / 36GB / macOS 26.4"
 BASELINE_VERSION = "1.0"
 BASELINE: Dict[str, float] = {
-    "cpu_single_prime_sieve":       1.0,
-    "cpu_single_mandelbrot":        1.0,
-    "cpu_single_matrix_1t":         1.0,
-    "cpu_single_compression":       1.0,
-    "cpu_single_sort":              1.0,
-    "cpu_multi_matrix_full":        1.0,
-    "cpu_multi_parallel_compute":   1.0,
-    "cpu_multi_hash_throughput":    1.0,
-    "cpu_multi_parallel_sort":      1.0,
-    "gpu_gpu_matrix":               1.0,
-    "gpu_gpu_elementwise":          1.0,
-    "gpu_gpu_reduction":            1.0,
-    "gpu_gpu_batch_matmul":         1.0,
-    "memory_mem_seq_read":          1.0,
-    "memory_mem_seq_write":         1.0,
-    "memory_mem_random_access":     1.0,
-    "memory_mem_copy":              1.0,
-    "storage_disk_seq_write":       1.0,
-    "storage_disk_seq_read":        1.0,
-    "storage_disk_random_write":    1.0,
-    "storage_disk_random_read":     1.0,
+    "cpu_single_prime_sieve":       679.71,         # ops/sec
+    "cpu_single_mandelbrot":        706766.50,       # pixels/sec
+    "cpu_single_matrix_1t":         790.00,          # GFLOPS
+    "cpu_single_compression":       145.20,          # MB/s
+    "cpu_single_sort":              6.68,            # M_elements/sec
+    "cpu_multi_matrix_full":        738.09,          # GFLOPS
+    "cpu_multi_parallel_compute":   2452066.81,      # pixels/sec
+    "cpu_multi_hash_throughput":    488.41,          # MB/s
+    "cpu_multi_parallel_sort":      20.91,           # M_elements/sec
+    "gpu_gpu_matrix":               10599.64,        # GFLOPS
+    "gpu_gpu_elementwise":          123.98,          # GB/s
+    "gpu_gpu_reduction":            341.70,          # GB/s
+    "gpu_gpu_batch_matmul":         9222.44,         # GFLOPS
+    "memory_mem_seq_read":          69.33,           # GB/s
+    "memory_mem_seq_write":         135.97,          # GB/s
+    "memory_mem_random_access":     236.76,          # M_accesses/sec
+    "memory_mem_copy":              143.82,          # GB/s
+    "storage_disk_seq_write":       7092.38,         # MB/s
+    "storage_disk_seq_read":        28725.31,        # MB/s
+    "storage_disk_random_write":    244391.70,       # IOPS
+    "storage_disk_random_read":     262895.55,       # IOPS
 }
 
 
