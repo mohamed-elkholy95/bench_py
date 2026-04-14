@@ -223,11 +223,11 @@ def report_to_dict(report: BenchmarkReport) -> Dict[str, Any]:
 
 def compute_test_score(raw_value: float, baseline_value: float) -> float:
     """Normalize a raw measurement against the baseline.
-    Returns a score where 1000 = baseline machine.
+    Returns a score where 10.0 = baseline machine.
     """
     if baseline_value <= 0:
         return 0.0
-    return (raw_value / baseline_value) * 1000.0
+    return (raw_value / baseline_value) * 10.0
 
 
 def geometric_mean(scores: List[float]) -> float:
@@ -1090,7 +1090,7 @@ PHASE_TO_CATEGORY: Dict[Phase, str] = {
 }
 
 BASELINE_MACHINE = "Apple M4 Max / 36GB / macOS 26.4"
-BASELINE_VERSION = "1.0"
+BASELINE_VERSION = "2.0"
 BASELINE: Dict[str, float] = {
     "cpu_single_prime_sieve":       679.71,         # ops/sec
     "cpu_single_mandelbrot":        706766.50,       # pixels/sec
@@ -1507,13 +1507,34 @@ class _Color:
     def cyan(self, t: str) -> str:   return self._wrap("36", t)
 
 
+def _format_raw(value: float, unit: str) -> str:
+    """Format a raw value with SI prefix for compact display."""
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M {unit}"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}K {unit}"
+    if value >= 100:
+        return f"{value:.0f} {unit}"
+    if value >= 10:
+        return f"{value:.1f} {unit}"
+    return f"{value:.2f} {unit}"
+
+
+def _format_score(score: float) -> str:
+    """Format a score as a compact 1-2 digit number with one decimal."""
+    if score >= 100:
+        return f"{score:.0f}"
+    return f"{score:.1f}"
+
+
 def _score_color(c: _Color, score: float) -> str:
-    """Color a score based on its value."""
-    if score >= 1000:
-        return c.green(f"{score:.0f}")
-    if score >= 800:
-        return c.yellow(f"{score:.0f}")
-    return c.red(f"{score:.0f}")
+    """Color a score based on its value (10.0 = baseline)."""
+    text = _format_score(score)
+    if score >= 10.0:
+        return c.green(text)
+    if score >= 8.0:
+        return c.yellow(text)
+    return c.red(text)
 
 
 def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
@@ -1534,22 +1555,32 @@ def format_terminal(report: BenchmarkReport, use_color: bool = True) -> str:
     for cat in report.categories:
         display = _CATEGORY_DISPLAY.get(cat.name, cat.name)
         if cat.skipped:
-            lines.append(f"  {c.dim(display):<30} {c.dim('(skipped)')}")
+            lines.append(f"  {c.dim(display):<24} {c.dim('-- skipped')}")
             continue
-        lines.append(c.bold(f"  {display}"))
+        cat_score_str = _score_color(c, cat.score)
+        lines.append(c.bold(f"  {display}") + f"  ({cat_score_str})")
         for test in cat.tests:
             score_str = _score_color(c, test.score)
-            lines.append(
-                f"    {test.name:<28} {test.raw_value:>10.2f} {test.unit:<18} score: {score_str}"
-            )
-        cat_score_str = _score_color(c, cat.score)
-        lines.append(f"  {'Category Score':<30} {cat_score_str}")
+            raw_str = _format_raw(test.raw_value, test.unit)
+            lines.append(f"    {test.name:<22} {score_str:>6}  {c.dim(raw_str)}")
         lines.append("")
 
     # Overall score
-    lines.append(c.bold("=" * 60))
+    lines.append(c.bold("-" * 60))
     overall_str = _score_color(c, report.overall_score)
-    lines.append(c.bold(f"  OVERALL SCORE : {overall_str}"))
+    lines.append(c.bold(f"  OVERALL SCORE : {overall_str}") + c.dim("  /10"))
+    lines.append("")
+
+    # Category summary bar
+    for cat in report.categories:
+        if cat.skipped:
+            continue
+        display = _CATEGORY_DISPLAY.get(cat.name, cat.name)
+        score_str = _score_color(c, cat.score)
+        bar_len = max(0, min(30, int(cat.score * 3)))  # 10.0 = 30 chars
+        bar = "=" * bar_len
+        lines.append(f"  {display:<20} {score_str:>6} {c.dim(bar)}")
+
     lines.append(c.bold("=" * 60))
 
     # Errors

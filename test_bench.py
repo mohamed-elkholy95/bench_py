@@ -70,7 +70,7 @@ def test_benchmark_result_defaults():
     from bench import BenchmarkResult
     r = BenchmarkResult(
         name="test", category="cpu_single", raw_value=100.0,
-        unit="ops/sec", score=1000.0, iterations=5, warmups=3,
+        unit="ops/sec", score=10.0, iterations=5, warmups=3,
         median_time=0.01, std_dev=0.001, times=[0.01, 0.01, 0.01, 0.01, 0.01],
     )
     assert r.degraded is False
@@ -79,7 +79,7 @@ def test_benchmark_result_defaults():
 
 def test_category_score_defaults():
     from bench import CategoryScore
-    c = CategoryScore(name="cpu_single", score=1000.0, weight=0.25, tests=[])
+    c = CategoryScore(name="cpu_single", score=10.0, weight=0.25, tests=[])
     assert c.skipped is False
     assert c.skip_reason is None
 
@@ -109,12 +109,12 @@ def test_benchmark_report_json_roundtrip():
     )
     result = BenchmarkResult(
         name="prime_sieve", category="cpu_single", raw_value=823.5,
-        unit="ops/sec", score=1000.0, iterations=5, warmups=3,
+        unit="ops/sec", score=10.0, iterations=5, warmups=3,
         median_time=0.00121, std_dev=0.00003,
         times=[0.00121, 0.00122, 0.00120, 0.00121, 0.00123],
     )
     cat = CategoryScore(
-        name="cpu_single", score=1000.0, weight=0.25, tests=[result],
+        name="cpu_single", score=10.0, weight=0.25, tests=[result],
     )
     integrity = ReportIntegrity(
         complete=True, degraded_tests=[], cpu_fallback_tests=[],
@@ -126,16 +126,16 @@ def test_benchmark_report_json_roundtrip():
         pre_flight={}, execution_mode="full",
     )
     report = BenchmarkReport(
-        overall_score=1000.0, categories=[cat],
+        overall_score=10.0, categories=[cat],
         baseline_machine="Apple M4 Max / 36GB / macOS",
-        baseline_version="1.0", system=None, skipped=[],
+        baseline_version="2.0", system=None, skipped=[],
         errors=[], integrity=integrity, execution=execution,
         duration_seconds=45.0, timestamp="2026-04-13T20:00:00Z",
     )
     d = report_to_dict(report)
     json_str = json.dumps(d)
     loaded = json.loads(json_str)
-    assert loaded["overall_score"] == 1000.0
+    assert loaded["overall_score"] == 10.0
     assert loaded["categories"][0]["name"] == "cpu_single"
     assert loaded["categories"][0]["tests"][0]["name"] == "prime_sieve"
     assert "system" not in loaded  # None values stripped
@@ -145,17 +145,17 @@ def test_benchmark_report_json_roundtrip():
 # Scoring engine
 # ---------------------------------------------------------------------------
 
-def test_compute_test_score_baseline_equals_1000():
+def test_compute_test_score_baseline_equals_10():
     from bench import compute_test_score
-    assert compute_test_score(100.0, 100.0) == 1000.0
+    assert compute_test_score(100.0, 100.0) == 10.0
 
-def test_compute_test_score_double_is_2000():
+def test_compute_test_score_double_is_20():
     from bench import compute_test_score
-    assert compute_test_score(200.0, 100.0) == 2000.0
+    assert compute_test_score(200.0, 100.0) == 20.0
 
-def test_compute_test_score_half_is_500():
+def test_compute_test_score_half_is_5():
     from bench import compute_test_score
-    assert compute_test_score(50.0, 100.0) == 500.0
+    assert compute_test_score(50.0, 100.0) == 5.0
 
 def test_compute_test_score_zero_baseline():
     from bench import compute_test_score
@@ -556,10 +556,10 @@ def _make_sample_report():
     )
     result = BenchmarkResult(
         name="prime_sieve", category="cpu_single", raw_value=1.0,
-        unit="ops/sec", score=1000.0, iterations=2, warmups=0,
+        unit="ops/sec", score=10.0, iterations=2, warmups=0,
         median_time=0.001, std_dev=0.0, times=[0.001, 0.001],
     )
-    cat = CategoryScore(name="cpu_single", score=1000.0, weight=0.25, tests=[result])
+    cat = CategoryScore(name="cpu_single", score=10.0, weight=0.25, tests=[result])
     integrity = ReportIntegrity(
         complete=True, degraded_tests=[], cpu_fallback_tests=[],
         retried_tests=[], partial=False, constrained=False,
@@ -570,8 +570,8 @@ def _make_sample_report():
         pre_flight={}, execution_mode="quick",
     )
     return BenchmarkReport(
-        overall_score=1000.0, categories=[cat],
-        baseline_machine="Test Machine", baseline_version="1.0",
+        overall_score=10.0, categories=[cat],
+        baseline_machine="Test Machine", baseline_version="2.0",
         system=None, skipped=[], errors=[],
         integrity=integrity, execution=execution,
         duration_seconds=1.0, timestamp="2026-04-13T00:00:00Z",
@@ -582,7 +582,7 @@ def test_format_terminal_produces_output():
     from bench import format_terminal
     output = format_terminal(_make_sample_report(), use_color=False)
     assert "OVERALL SCORE" in output
-    assert "1000" in output
+    assert "10.0" in output
 
 
 def test_format_terminal_no_ansi():
@@ -595,7 +595,7 @@ def test_format_json_valid():
     from bench import format_json
     result = format_json(_make_sample_report())
     parsed = json.loads(result)
-    assert parsed["overall_score"] == 1000.0
+    assert parsed["overall_score"] == 10.0
 
 
 def test_format_text_no_ansi():
