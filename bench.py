@@ -1600,3 +1600,182 @@ def save_outputs(
             f.write("\n")
 
     return json_path, text_path
+
+
+# ---------------------------------------------------------------------------
+# Task 14: CLI, main(), Signal Handling
+# ---------------------------------------------------------------------------
+
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    """Parse command-line arguments for the benchmark tool."""
+    parser = argparse.ArgumentParser(
+        description="System Benchmark -- comprehensive performance scoring",
+    )
+    parser.add_argument(
+        "--system-report", dest="system_report", default=None,
+        metavar="PATH",
+        help="Path to system_report.json (optional)",
+    )
+    parser.add_argument(
+        "--json-only", dest="json_only", action="store_true", default=False,
+        help="Output JSON only (no terminal report)",
+    )
+    parser.add_argument(
+        "--verbose", "-v", dest="verbose", action="store_true", default=False,
+        help="Verbose logging",
+    )
+    parser.add_argument(
+        "--no-color", dest="no_color", action="store_true", default=False,
+        help="Disable ANSI color output",
+    )
+    parser.add_argument(
+        "--timeout", dest="timeout", type=int, default=60,
+        metavar="SECONDS",
+        help="Overall benchmark timeout in seconds (default: 60)",
+    )
+    parser.add_argument(
+        "--test-timeout", dest="test_timeout", type=int, default=30,
+        metavar="SECONDS",
+        help="Per-test timeout in seconds (default: 30)",
+    )
+    parser.add_argument(
+        "--output-dir", dest="output_dir", default=".",
+        metavar="DIR",
+        help="Directory for output files (default: .)",
+    )
+    parser.add_argument(
+        "--skip", dest="skip", action="append", default=[],
+        metavar="CATEGORY",
+        help="Skip a benchmark category (repeatable)",
+    )
+    parser.add_argument(
+        "--only", dest="only", action="append", default=[],
+        metavar="CATEGORY",
+        help="Run only this benchmark category (repeatable)",
+    )
+    parser.add_argument(
+        "--iterations", dest="iterations", type=int, default=5,
+        metavar="N",
+        help="Measured iterations per benchmark (default: 5)",
+    )
+    parser.add_argument(
+        "--warmups", dest="warmups", type=int, default=3,
+        metavar="N",
+        help="Warmup iterations per benchmark (default: 3)",
+    )
+    parser.add_argument(
+        "--quick", dest="quick", action="store_true", default=False,
+        help="Quick mode: reduced sizes and iterations",
+    )
+    parser.add_argument(
+        "--no-cooldown", dest="no_cooldown", action="store_true", default=False,
+        help="Skip cooldown waits between phases",
+    )
+    parser.add_argument(
+        "--calibrate", dest="calibrate", action="store_true", default=False,
+        help="Print raw benchmark values for baseline calibration",
+    )
+    return parser.parse_args(argv)
+
+
+_orchestrator_ref: Optional["BenchmarkOrchestrator"] = None
+
+
+def _signal_handler(signum: int, _frame: Any) -> None:
+    """Handle interrupt/termination signals gracefully."""
+    log.warning("Received signal %d — shutting down benchmark.", signum)
+    if _orchestrator_ref is not None:
+        _orchestrator_ref.shutdown()
+
+
+def main() -> None:
+    """Entry point for the benchmark tool."""
+    global _orchestrator_ref
+
+    if not HAS_NUMPY:
+        print("ERROR: numpy is required. Install with: pip install numpy", file=sys.stderr)
+        sys.exit(1)
+
+    args = parse_args()
+
+    # Logging setup
+    level = logging.DEBUG if args.verbose else logging.WARNING
+    logging.basicConfig(
+        level=level,
+        format="%(levelname)s [%(name)s] %(message)s",
+    )
+
+    # Load system report (optional)
+    system_info: Dict[str, Any] = {}
+    report_path = args.system_report or "./system_report.json"
+    if os.path.exists(report_path):
+        try:
+            with open(report_path, "r", encoding="utf-8") as f:
+                system_info = json.load(f)
+        except Exception as e:
+            log.warning("Could not load system report from %s: %s", report_path, e)
+    else:
+        log.warning("system_report.json not found at %s — running without system info.", report_path)
+
+    # Build config
+    config = BenchConfig(
+        iterations=args.iterations,
+        warmups=args.warmups,
+        test_timeout=args.test_timeout,
+        timeout=args.timeout,
+        skip_categories=args.skip,
+        only_categories=args.only,
+        quick=args.quick,
+        no_cooldown=args.no_cooldown,
+        calibrate=args.calibrate,
+        json_only=args.json_only,
+        no_color=args.no_color,
+        verbose=args.verbose,
+        output_dir=args.output_dir,
+    )
+
+    # Install signal handlers
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+
+    # Create and run orchestrator
+    orch = BenchmarkOrchestrator(config, system_info)
+    _orchestrator_ref = orch
+    report = orch.run()
+    _orchestrator_ref = None
+
+    # Calibrate mode: print raw values
+    if args.calibrate:
+        print("\n--- CALIBRATION VALUES ---")
+        for cat in report.categories:
+            if cat.skipped:
+                continue
+            for test in cat.tests:
+                key = f"{test.category}_{test.name}"
+                print(f"    {key!r}: {test.raw_value},")
+        print("--- END CALIBRATION ---\n")
+
+    # Output
+    if args.json_only:
+        print(format_json(report))
+    else:
+        print(format_terminal(report, use_color=(not args.no_color)))
+
+    # Save files
+    try:
+        json_path, text_path = save_outputs(
+            report,
+            output_dir=args.output_dir,
+            json_only=args.json_only,
+        )
+        if not args.json_only:
+            log.info("Reports saved: %s, %s", json_path, text_path)
+    except OSError as e:
+        log.warning("Could not save output files: %s", e)
+
+    # Exit code
+    sys.exit(0 if report.overall_score > 0 else 1)
+
+
+if __name__ == "__main__":
+    main()

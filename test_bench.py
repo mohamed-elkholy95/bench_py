@@ -609,3 +609,31 @@ def test_save_outputs_creates_files():
         json_path, text_path = save_outputs(_make_sample_report(), output_dir=tmpdir)
         assert os.path.exists(json_path)
         assert text_path and os.path.exists(text_path)
+
+
+# ---------------------------------------------------------------------------
+# Task 14: CLI, main(), signal handling
+# ---------------------------------------------------------------------------
+
+def test_parse_args_defaults():
+    from bench import parse_args
+    args = parse_args([])
+    assert args.json_only is False
+    assert args.timeout == 60
+    assert args.test_timeout == 30
+    assert args.iterations == 5
+    assert args.warmups == 3
+    assert args.quick is False
+    assert args.skip == []
+
+
+def test_parse_args_all_flags():
+    from bench import parse_args
+    args = parse_args(["--json-only", "--verbose", "--no-color", "--timeout", "120",
+        "--test-timeout", "60", "--output-dir", "/tmp", "--iterations", "10",
+        "--warmups", "5", "--quick", "--no-cooldown", "--calibrate",
+        "--skip", "gpu", "--skip", "storage", "--only", "cpu_single"])
+    assert args.json_only is True
+    assert args.timeout == 120
+    assert args.skip == ["gpu", "storage"]
+    assert args.only == ["cpu_single"]
