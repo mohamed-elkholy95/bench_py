@@ -380,3 +380,35 @@ def test_bench_hash_throughput():
 def test_bench_parallel_sort():
     from bench import bench_parallel_sort
     assert bench_parallel_sort(100_000) > 0
+
+
+# ---------------------------------------------------------------------------
+# Task 8: GPU compute benchmarks
+# ---------------------------------------------------------------------------
+
+def test_bench_gpu_matrix():
+    from bench import bench_gpu_matrix, HAS_MLX
+    if not HAS_MLX:
+        pytest.skip("MLX not available")
+    assert bench_gpu_matrix(512) > 0
+
+
+def test_bench_gpu_elementwise():
+    from bench import bench_gpu_elementwise, HAS_MLX
+    if not HAS_MLX:
+        pytest.skip("MLX not available")
+    assert bench_gpu_elementwise(1_000_000) > 0
+
+
+def test_bench_gpu_reduction():
+    from bench import bench_gpu_reduction, HAS_MLX
+    if not HAS_MLX:
+        pytest.skip("MLX not available")
+    assert bench_gpu_reduction(1_000_000) > 0
+
+
+def test_bench_gpu_batch_matmul():
+    from bench import bench_gpu_batch_matmul, HAS_MLX
+    if not HAS_MLX:
+        pytest.skip("MLX not available")
+    assert bench_gpu_batch_matmul(4, 128) > 0
