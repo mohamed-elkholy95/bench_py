@@ -269,3 +269,93 @@ def compute_overall_score(categories: List[CategoryScore]) -> float:
     if total_weight <= 0:
         return 0.0
     return math.exp(log_sum / total_weight)
+
+# ---------------------------------------------------------------------------
+# Retry policy
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RetryPolicy:
+    max_retries: int = 2
+    backoff_seconds: float = 1.0
+    _retry_types: Tuple[type, ...] = (TestTimeout, TestCrashed)
+    _no_retry_types: Tuple[type, ...] = (
+        ImportError, NotImplementedError, PermissionError,
+    )
+
+    def should_retry(self, exc: Exception) -> bool:
+        if isinstance(exc, self._no_retry_types):
+            return False
+        return isinstance(exc, self._retry_types) or isinstance(exc, MemoryError)
+
+
+# ---------------------------------------------------------------------------
+# Subprocess target (module-level for pickling)
+# ---------------------------------------------------------------------------
+
+def _subprocess_target(fn: Callable, args: tuple, result_queue: multiprocessing.Queue) -> None:
+    """Target function for multiprocessing.Process. Must be module-level."""
+    try:
+        value = fn(*args)
+        result_queue.put(("ok", value))
+    except Exception as exc:
+        result_queue.put(("error", repr(exc)))
+
+
+# ---------------------------------------------------------------------------
+# TestExecutor
+# ---------------------------------------------------------------------------
+
+class TestExecutor:
+    """Run a single benchmark function in an isolated subprocess."""
+
+    def __init__(self) -> None:
+        self._active_process: Optional[multiprocessing.Process] = None
+
+    def run_single(self, fn: Callable, args: tuple = (), timeout: int = 30) -> float:
+        """Run fn(*args) in a subprocess. Returns the float result.
+        Raises TestTimeout or TestCrashed on failure.
+        """
+        result_queue: multiprocessing.Queue = multiprocessing.Queue()
+        proc = multiprocessing.Process(
+            target=_subprocess_target,
+            args=(fn, args, result_queue),
+        )
+        self._active_process = proc
+        proc.start()
+        proc.join(timeout=timeout)
+
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=3)
+            if proc.is_alive():
+                proc.kill()
+                proc.join()
+            self._active_process = None
+            raise TestTimeout(f"Benchmark timed out after {timeout}s")
+
+        self._active_process = None
+
+        if proc.exitcode != 0:
+            raise TestCrashed(
+                f"Benchmark subprocess exited with code {proc.exitcode}",
+                proc.exitcode or -1,
+            )
+
+        if result_queue.empty():
+            raise TestCrashed("Benchmark returned no result", -1)
+
+        status, value = result_queue.get_nowait()
+        if status == "error":
+            raise TestCrashed(f"Benchmark raised: {value}", 1)
+
+        return value
+
+    def kill_active(self) -> None:
+        """Kill the currently running subprocess, if any."""
+        if self._active_process and self._active_process.is_alive():
+            self._active_process.terminate()
+            self._active_process.join(timeout=3)
+            if self._active_process.is_alive():
+                self._active_process.kill()
+                self._active_process.join()

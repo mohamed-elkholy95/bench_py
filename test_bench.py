@@ -224,3 +224,68 @@ def test_overall_score_all_baseline():
     ]
     result = compute_overall_score(cats)
     assert abs(result - 1000.0) < 0.01
+
+# ---------------------------------------------------------------------------
+# RetryPolicy
+# ---------------------------------------------------------------------------
+
+def test_retry_policy_defaults():
+    from bench import RetryPolicy
+    rp = RetryPolicy()
+    assert rp.max_retries == 2
+    assert rp.backoff_seconds == 1.0
+
+def test_retry_policy_should_retry_timeout():
+    from bench import RetryPolicy, TestTimeout
+    rp = RetryPolicy()
+    assert rp.should_retry(TestTimeout("x"))
+
+def test_retry_policy_should_not_retry_import():
+    from bench import RetryPolicy
+    rp = RetryPolicy()
+    assert not rp.should_retry(ImportError("x"))
+
+
+# ---------------------------------------------------------------------------
+# TestExecutor — subprocess isolation
+# ---------------------------------------------------------------------------
+
+def _dummy_bench_success(size: int) -> float:
+    """A trivial benchmark that returns a known throughput."""
+    return 42.0
+
+
+def test_executor_runs_function():
+    """TestExecutor runs a function and returns its result."""
+    from bench import TestExecutor
+    executor = TestExecutor()
+    result = executor.run_single(_dummy_bench_success, (100,), timeout=10)
+    assert result == 42.0
+
+
+def _dummy_bench_crash(size: int) -> float:
+    """A benchmark that crashes."""
+    raise RuntimeError("boom")
+
+
+def test_executor_handles_crash():
+    """TestExecutor raises TestCrashed when subprocess errors."""
+    from bench import TestExecutor, TestCrashed
+    executor = TestExecutor()
+    with pytest.raises(TestCrashed):
+        executor.run_single(_dummy_bench_crash, (100,), timeout=10)
+
+
+def _dummy_bench_slow(size: int) -> float:
+    """A benchmark that takes too long."""
+    import time as _time
+    _time.sleep(30)
+    return 0.0
+
+
+def test_executor_handles_timeout():
+    """TestExecutor raises TestTimeout when function exceeds timeout."""
+    from bench import TestExecutor, TestTimeout
+    executor = TestExecutor()
+    with pytest.raises(TestTimeout):
+        executor.run_single(_dummy_bench_slow, (100,), timeout=2)
